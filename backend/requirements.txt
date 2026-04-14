@@ -1,0 +1,25 @@
+# Web framework
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+
+# Database
+sqlalchemy==2.0.36
+psycopg2-binary==2.9.10
+alembic==1.14.1
+
+# Auth (Phase 4, but install now to avoid rebuild)
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+
+# Environment
+python-dotenv==1.0.1
+
+# HTTP client for Scryfall (Phase 3)
+httpx==0.28.1
+
+# OpenAI (Phase 6)
+openai==1.58.1
+
+# Utilities
+pydantic[email]==2.10.4
+pydantic-settings==2.7.1

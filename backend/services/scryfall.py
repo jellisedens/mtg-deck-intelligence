@@ -106,6 +106,17 @@ class ScryfallService:
             "format": "json",
         })
 
+    async def search_cards_raw(self, query: str, page: int = 1) -> dict:
+        """
+        Search for cards using raw Scryfall syntax.
+        Does NOT add any format filters — the AI controls the full query.
+        """
+        return await self._get("/cards/search", {
+            "q": query,
+            "page": page,
+            "format": "json",
+        })
+
     async def get_card_by_name(self, name: str, fuzzy: bool = False) -> dict:
         """
         Get a single card by name.

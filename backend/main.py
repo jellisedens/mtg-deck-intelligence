@@ -4,6 +4,7 @@ from api.health import router as health_router
 from api.scryfall import router as scryfall_router
 from api.auth import router as auth_router
 from api.decks import router as decks_router
+from api.analytics import router as analytics_router
 
 app = FastAPI(
     title="MTG Deck Intelligence",
@@ -25,7 +26,7 @@ app.include_router(health_router)
 app.include_router(scryfall_router)
 app.include_router(auth_router)
 app.include_router(decks_router)
-
+app.include_router(analytics_router)
 
 @app.get("/")
 def root():

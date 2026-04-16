@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from api.health import router as health_router
+from api.scryfall import router as scryfall_router
 
 app = FastAPI(
     title="MTG Deck Intelligence",
@@ -19,6 +20,7 @@ app.add_middleware(
 
 # Register routers
 app.include_router(health_router)
+app.include_router(scryfall_router)
 
 
 @app.get("/")

@@ -2,6 +2,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from api.health import router as health_router
 from api.scryfall import router as scryfall_router
+from api.auth import router as auth_router
+from api.decks import router as decks_router
 
 app = FastAPI(
     title="MTG Deck Intelligence",
@@ -12,7 +14,7 @@ app = FastAPI(
 # CORS — allow frontend dev server to call the API
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],  # Next.js dev server
+    allow_origins=["http://localhost:3000"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -21,6 +23,8 @@ app.add_middleware(
 # Register routers
 app.include_router(health_router)
 app.include_router(scryfall_router)
+app.include_router(auth_router)
+app.include_router(decks_router)
 
 
 @app.get("/")

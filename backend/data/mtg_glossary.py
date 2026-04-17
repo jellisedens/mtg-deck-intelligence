@@ -31,7 +31,9 @@ MANA & RESOURCE DEVELOPMENT
   - Mana rocks: t:artifact o:"{T}: Add" cmc<=3
   - Land ramp: (o:"search your library" o:land) OR (o:"put" o:land o:battlefield)
   - Extra land drops: o:"additional land"
-  - Cost reduction: o:"cost" o:"less"
+  - Cost reducers / medallions: o:"spells you cast cost" o:"less" (e.g., Sapphire Medallion, Ruby Medallion, Jet Medallion, Pearl Medallion, Emerald Medallion, Urza's Incubator, Herald's Horn)
+  - Cost reducers by type: o:"cost" o:"{1} less" OR o:"cost" o:"{2} less"
+  YOU MUST generate at least one query for EACH of these subcategories when the user asks for "ramp"
 
 "mana fixing" / "color fixing"
   - t:land (o:"any color" OR o:"add one mana of any")
@@ -252,3 +254,70 @@ User: "find me budget mana rocks under $2"
   DO NOT: o:ramp t:artifact
   DO: t:artifact o:"{T}: Add" cmc<=3 usd<2 f:commander
 """
+
+CLARIFICATIONS = {
+    "ramp": {
+        "display": "What type of ramp are you looking for?",
+        "options": [
+            {"label": "Mana dorks", "description": "Creatures that tap for mana (e.g., Llanowar Elves, Birds of Paradise)"},
+            {"label": "Mana rocks", "description": "Artifacts that produce mana (e.g., Sol Ring, Arcane Signet)"},
+            {"label": "Land ramp", "description": "Spells that search for lands (e.g., Cultivate, Kodama's Reach)"},
+            {"label": "Cost reducers", "description": "Cards that make spells cheaper (e.g., Sapphire Medallion, Urza's Incubator)"},
+            {"label": "Extra land drops", "description": "Cards that let you play additional lands (e.g., Azusa, Exploration)"},
+            {"label": "Treasure/temporary mana", "description": "Cards that create treasure tokens or one-time mana bursts"},
+            {"label": "All types", "description": "Show me a mix of everything"},
+        ],
+    },
+    "removal": {
+        "display": "What kind of removal do you need?",
+        "options": [
+            {"label": "Spot removal", "description": "Targeted destroy/exile effects (e.g., Swords to Plowshares, Path to Exile)"},
+            {"label": "Board wipes", "description": "Mass removal that clears the board (e.g., Wrath of God, Cyclonic Rift)"},
+            {"label": "Artifact/enchantment removal", "description": "Destroy or exile artifacts and enchantments"},
+            {"label": "Creature removal", "description": "Cards that specifically deal with creatures"},
+            {"label": "Flexible removal", "description": "Cards that can hit multiple permanent types"},
+            {"label": "All types", "description": "Show me a mix of everything"},
+        ],
+    },
+    "card draw": {
+        "display": "What kind of card draw are you looking for?",
+        "options": [
+            {"label": "One-shot draw", "description": "Spells that draw cards immediately (e.g., Harmonize, Blue Sun's Zenith)"},
+            {"label": "Draw engines", "description": "Permanents that draw repeatedly (e.g., Rhystic Study, Phyrexian Arena)"},
+            {"label": "Cantrips", "description": "Cheap spells that replace themselves"},
+            {"label": "Impulse draw", "description": "Exile top cards and play them (red-style draw)"},
+            {"label": "Wheels", "description": "Everyone discards and draws new hands"},
+            {"label": "All types", "description": "Show me a mix of everything"},
+        ],
+    },
+    "interaction": {
+        "display": "What kind of interaction are you looking for?",
+        "options": [
+            {"label": "Counterspells", "description": "Negate or counter opponent's spells"},
+            {"label": "Protection", "description": "Hexproof, indestructible, shroud for your permanents"},
+            {"label": "Bounce", "description": "Return permanents to hand"},
+            {"label": "Tax effects", "description": "Make opponents pay more for spells"},
+            {"label": "All types", "description": "Show me a mix of everything"},
+        ],
+    },
+    "lands": {
+        "display": "What kind of lands are you looking for?",
+        "options": [
+            {"label": "Dual lands", "description": "Lands that produce two or more colors"},
+            {"label": "Fetch lands", "description": "Lands that search for other lands"},
+            {"label": "Utility lands", "description": "Lands with special abilities beyond mana"},
+            {"label": "Budget mana fixing", "description": "Affordable lands that fix colors"},
+            {"label": "All types", "description": "Show me a mix of everything"},
+        ],
+    },
+    "protection": {
+        "display": "What kind of protection do you need?",
+        "options": [
+            {"label": "Board protection", "description": "Protect all your permanents (e.g., Teferi's Protection)"},
+            {"label": "Single target", "description": "Protect one key creature or permanent"},
+            {"label": "Graveyard protection", "description": "Prevent exile or protect your graveyard"},
+            {"label": "Pillowfort", "description": "Discourage opponents from attacking you"},
+            {"label": "All types", "description": "Show me a mix of everything"},
+        ],
+    },
+}

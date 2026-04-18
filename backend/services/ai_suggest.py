@@ -83,6 +83,7 @@ async def get_suggestions(prompt: str, deck_cards: list = None, deck_info: dict 
         search_results=search_results,
         deck_context=deck_context,
         role_data=role_data,
+        deck_info=deck_info,
     )
 
     # Include debug info
@@ -415,7 +416,8 @@ async def _execute_searches(queries: list, exclude_cards: set = None) -> list:
 
 
 def _get_ai_recommendations(prompt: str, plan: dict, search_results: list,
-                            deck_context: str = None, role_data: dict = None) -> dict:
+                            deck_context: str = None, role_data: dict = None,
+                            deck_info: dict = None) -> dict:
     """
     Ask AI to analyze Scryfall results and give final recommendations.
     """
@@ -601,17 +603,32 @@ Violating this rule makes recommendations untrustworthy. When in doubt, do NOT s
         content = content.replace("```json", "").replace("```", "").strip()
         result = json.loads(content)
 
-        # Enrich suggestions with image data from search results
+        # Enrich suggestions — verify both ID and name match
         result_lookup = {c["scryfall_id"]: c for c in search_results}
+        name_lookup = {c["name"].lower(): c for c in search_results}
         verified_suggestions = []
         for suggestion in result.get("suggestions", []):
             card_data = result_lookup.get(suggestion.get("scryfall_id"))
-            if card_data:
+            suggested_name = suggestion.get("card_name", "").lower()
+
+            # Verify the scryfall_id actually matches the card name
+            if card_data and card_data.get("name", "").lower() == suggested_name:
+                # ID and name match — use as-is
                 suggestion["image_uri"] = card_data.get("image_uris", {}).get("normal", "")
                 suggestion["mana_cost"] = card_data.get("mana_cost", "")
                 suggestion["type_line"] = card_data.get("type_line", "")
                 suggestion["price_usd"] = card_data.get("prices", {}).get("usd")
                 verified_suggestions.append(suggestion)
+            elif suggested_name in name_lookup:
+                # AI used wrong ID but card exists in results — fix the ID
+                correct_data = name_lookup[suggested_name]
+                suggestion["scryfall_id"] = correct_data["scryfall_id"]
+                suggestion["image_uri"] = correct_data.get("image_uris", {}).get("normal", "")
+                suggestion["mana_cost"] = correct_data.get("mana_cost", "")
+                suggestion["type_line"] = correct_data.get("type_line", "")
+                suggestion["price_usd"] = correct_data.get("prices", {}).get("usd")
+                verified_suggestions.append(suggestion)
+            # Otherwise: card not in search results — silently drop
 
         result["suggestions"] = verified_suggestions
 
@@ -620,18 +637,28 @@ Violating this rule makes recommendations untrustworthy. When in doubt, do NOT s
             primary_type = (role_data.get("primary_creature_type") or "").lower()
             role_list = role_data.get("card_roles", [])
             role_by_name = {cr["name"].lower(): cr for cr in role_list}
-            # Set of actual card names in the deck
             deck_card_names = {cr["name"].lower() for cr in role_list}
+
+            # Build critical cards set from strategy profile
+            critical_cards = set()
+            if deck_info and isinstance(deck_info, dict):
+                profile = deck_info.get("strategy_profile") or {}
+                for card_name in profile.get("critical_cards", []):
+                    critical_cards.add(card_name.lower())
 
             verified_cuts = []
             for cut in result.get("cuts", []):
                 cut_name = cut.get("card_name", "").lower()
 
-                # Skip cuts for cards not actually in the deck
+                # Must be in the deck
                 if cut_name not in deck_card_names:
                     continue
 
-                # Skip cards with tribal synergy
+                # Must not be a critical card from strategy profile
+                if cut_name in critical_cards:
+                    continue
+
+                # Must not be tribal synergy
                 is_protected = False
                 if primary_type and primary_type in cut_name:
                     is_protected = True

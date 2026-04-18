@@ -75,6 +75,7 @@ async def compute_analytics(deck_cards: list, include_card_data: bool = False) -
     mana_base = _compute_mana_base(expanded_cards)
     avg_cmc = _compute_average_cmc(expanded_cards)
     composition = _compute_composition(deck_cards)
+    deck_identity = _compute_deck_identity(type_distribution)
 
     result = {
         "total_cards": sum(c.quantity for c in deck_cards),
@@ -86,6 +87,7 @@ async def compute_analytics(deck_cards: list, include_card_data: bool = False) -
         "mana_base": mana_base,
         "average_cmc": avg_cmc,
         "composition": composition,
+        "deck_identity": deck_identity,
     }
 
     # Include card lookup for AI context if requested
@@ -236,6 +238,43 @@ def _compute_composition(deck_cards: list) -> dict:
     composition["total"] = sum(composition.values())
     return composition
 
+def _compute_deck_identity(type_distribution: dict) -> dict:
+    """Determine the deck's primary identity based on non-land card types."""
+    non_land = {t: c for t, c in type_distribution.items() if t != "Land" and c > 0}
+    total_non_land = sum(non_land.values())
+    
+    if total_non_land == 0:
+        return {"primary_type": "unknown", "percentages": {}, "recommendation_weight": "balanced"}
+    
+    percentages = {t: round(c / total_non_land * 100, 1) for t, c in non_land.items()}
+    sorted_types = sorted(percentages.items(), key=lambda x: -x[1])
+    primary_type = sorted_types[0][0] if sorted_types else "unknown"
+    primary_pct = sorted_types[0][1] if sorted_types else 0
+    
+    # Determine recommendation weight
+    if primary_pct >= 50:
+        weight = f"heavily {primary_type.lower()}-based"
+    elif primary_pct >= 35:
+        weight = f"primarily {primary_type.lower()}-based"
+    else:
+        weight = "balanced"
+    
+    # Count spells vs permanents
+    spell_types = {"Instant", "Sorcery"}
+    permanent_types = {"Creature", "Enchantment", "Artifact", "Planeswalker"}
+    
+    spell_count = sum(type_distribution.get(t, 0) for t in spell_types)
+    permanent_count = sum(type_distribution.get(t, 0) for t in permanent_types)
+    
+    return {
+        "primary_nonland_type": primary_type,
+        "primary_nonland_percentage": primary_pct,
+        "type_percentages": dict(sorted_types),
+        "recommendation_weight": weight,
+        "spell_count": spell_count,
+        "permanent_count": permanent_count,
+        "spell_vs_permanent": "spell-heavy" if spell_count > permanent_count else "permanent-heavy",
+    }
 
 def _empty_analytics() -> dict:
     """Return empty analytics structure for an empty deck."""

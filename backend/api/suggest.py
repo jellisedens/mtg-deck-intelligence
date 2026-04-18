@@ -48,6 +48,7 @@ async def suggest_cards(
             "name": deck.name,
             "format": deck.format,
             "description": deck.description,
+            "strategy_profile": deck.strategy_profile,
         }
 
     result = await get_suggestions(

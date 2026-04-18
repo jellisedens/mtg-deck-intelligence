@@ -6,6 +6,7 @@ from api.auth import router as auth_router
 from api.decks import router as decks_router
 from api.analytics import router as analytics_router
 from api.suggest import router as suggest_router
+from api.strategy import router as strategy_router
 
 app = FastAPI(
     title="MTG Deck Intelligence",
@@ -29,6 +30,7 @@ app.include_router(auth_router)
 app.include_router(decks_router)
 app.include_router(analytics_router)
 app.include_router(suggest_router)
+app.include_router(strategy_router)
 
 @app.get("/")
 def root():

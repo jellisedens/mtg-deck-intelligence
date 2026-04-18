@@ -85,20 +85,47 @@ def classify_deck_roles(deck_cards: list, card_lookup: dict, deck_info: dict = N
 
     system = f"""You are an expert MTG deck analyst. Classify each card by its PRIMARY strategic role.
 
-Available roles: {json.dumps(STRATEGIC_ROLES)}
+ALLOWED ROLES (you MUST only use these exact strings — no others):
+{json.dumps(STRATEGIC_ROLES)}
+
+Do NOT invent new roles like "aggressive", "commander", "treasure generation", etc.
+Every primary_role and every entry in secondary_roles MUST be one of the allowed roles listed above.
 
 Rules:
 - Each card gets exactly ONE primary role (its most important function in this specific deck)
 - A card can also have secondary roles listed separately
-- Lands are ALWAYS role "land" — no exceptions. If a card's type_line contains "Land", its primary_role MUST be "land". Use secondary_roles to capture additional functions (e.g., a land that also fixes mana gets primary_role "land" and secondary_roles ["mana_fixing"])- Cards that reference the deck's primary creature type ({primary_type or 'none'}) and provide
-  a bonus to that type should be tagged as "tribal_synergy"
-- Mana dorks and mana rocks are "ramp"
+- Lands are ALWAYS primary_role "land" — no exceptions. If a card's type_line contains "Land", its primary_role MUST be "land". Use secondary_roles to capture additional functions.
+
+CRITICAL — TRIBAL SYNERGY CLASSIFICATION:
+The deck's primary creature type is: {primary_type or 'none'}
+Any card that meets ANY of the following criteria MUST have "tribal_synergy" as EITHER its
+primary_role OR in its secondary_roles:
+- The card's oracle text mentions "{primary_type or 'none'}" by name
+- The card's type_line includes the primary creature type
+- The card's abilities only work with or specifically benefit the primary creature type
+- The card reduces costs specifically for the primary creature type
+- The card triggers when creatures of the primary type enter, attack, die, or deal damage
+- The card creates tokens of the primary creature type
+
+Examples for a Dragon deck:
+- Dragon Tempest → primary: tribal_synergy (gives dragons haste + damage on dragon ETB)
+- Dragonspeaker Shaman → primary: tribal_synergy (reduces dragon costs specifically)
+- Dragonborn Champion → primary: tribal_synergy (draws cards when dragons deal damage)
+- Lathliss, Dragon Queen → primary: tribal_synergy (creates dragon tokens when dragons enter)
+- Dragon's Hoard → primary: ramp, secondary: [tribal_synergy, card_draw]
+
+If a card mentions the primary creature type in its oracle text, tribal_synergy MUST appear
+somewhere in its classification. This is non-negotiable.
+
+ROLE ASSIGNMENT GUIDELINES:
 - Cards that say "search your library" are "tutor"
-- Cards that reduce costs are "cost_reducer"
-- Cards that draw cards or provide card advantage are "card_draw"
+- Cards that reduce costs are "cost_reducer" (but if they reduce costs for the PRIMARY TYPE, they are "tribal_synergy" first)
+- Cards that draw cards are "card_draw" (but if they draw specifically because of the PRIMARY TYPE, they are "tribal_synergy" first)
 - Cards that destroy/exile/damage permanents are "removal"
 - Cards that destroy ALL or affect ALL are "board_wipe"
+- Mana dorks and mana rocks that produce mana are "ramp"
 - Consider what the card DOES IN THIS DECK, not in a vacuum
+- When in doubt between tribal_synergy and another role, choose tribal_synergy as primary
 
 Respond with ONLY valid JSON (no markdown):
 {{
@@ -139,7 +166,7 @@ Respond with ONLY valid JSON (no markdown):
             all_roles.extend(parsed.get("card_roles", []))
 
         except Exception as e:
-            # If classification fails for a batch, continue with others
+            print(f"  Classification error: {type(e).__name__}: {e}")
             for card in batch:
                 all_roles.append({
                     "name": card["name"],

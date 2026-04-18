@@ -321,3 +321,115 @@ CLARIFICATIONS = {
         ],
     },
 }
+
+REPLACEMENT_GUIDE = """
+CARD REPLACEMENT LOGIC:
+When a user asks to replace a specific card, DO NOT search for cards with identical mechanics.
+Instead, identify the STRATEGIC ROLE the card fills, then search for alternatives that fill the same role.
+
+Process:
+1. Identify what the card DOES for the deck (its strategic role)
+2. Search for cards that fill that same role, even with different mechanics
+3. Consider budget constraints if mentioned
+
+Example strategic roles:
+- Smothering Tithe → "passive MANA generation engine" → search for:
+  - o:"create" o:"treasure" t:enchantment f:commander (treasure generators)
+  - o:"whenever" o:"add" t:enchantment f:commander (mana triggers)
+  - o:"opponent" o:"pay" f:commander (tax effects that generate resources)
+  - o:"create" o:"treasure" f:commander (broader treasure generation)
+  - Do NOT suggest card DRAW replacements — Smothering Tithe generates MANA, not cards
+
+VALUE TYPE DISTINCTIONS — critical for replacements:
+  - MANA generation: cards that produce mana, treasure, or reduce costs
+  - CARD DRAW: cards that draw cards or provide card selection
+  - BOARD CONTROL: cards that remove or neutralize threats
+  - BOARD PRESENCE: cards that create tokens or buff creatures
+  - LIFE/DEFENSE: cards that gain life or prevent damage
+  Always identify the SPECIFIC value type before searching for replacements.
+
+- Cyclonic Rift → "asymmetric board reset" → search for:
+  - o:"each opponent" o:"return" f:commander
+  - o:"destroy all" f:commander
+  - o:"exile all" f:commander
+
+- Sol Ring → "explosive early ramp" → search for:
+  - t:artifact o:"{T}: Add" cmc<=2 f:commander
+  - t:artifact o:"add" o:"mana" cmc=0 f:commander
+
+NEVER search for the exact card text of what you're replacing.
+ALWAYS think about the ROLE and search for that role broadly.
+Generate 3-5 diverse queries covering different angles of the same strategic role.
+"""
+
+SYNERGY_RULES = """
+SYNERGY-AWARE EVALUATION:
+When analyzing a deck or suggesting cuts, you MUST evaluate cards in the context of deck synergy.
+
+TRIBAL SYNERGY:
+- If the deck has a primary creature type (dragon, goblin, elf, etc.), cards that reference
+  that type by name, grant bonuses to that type, or trigger off that type are HIGH SYNERGY
+  and should NEVER be suggested as cuts
+- Examples: Dragon Tempest in a dragon deck, Goblin Chieftain in a goblin deck
+- Cards that reduce costs for the primary type (Urza's Incubator, Herald's Horn) are CORE INFRASTRUCTURE
+- Cards that reference the commander by name or directly enable the commander's strategy are PROTECTED
+
+COMMANDER SYNERGY:
+- Cards that directly enable the commander's abilities or strategy are CORE and should never be cut
+- Cards referenced in the deck's strategic description as part of a win condition are PROTECTED
+- Cards that share mechanical themes with the commander are HIGH SYNERGY
+
+ABILITY TEXT SYNERGY:
+- Cards whose ability text directly interacts with the commander's abilities or the deck's
+  primary creature type should be weighted heavily
+- Example: Savage Ventmaw in a dragon deck that needs mana = HIGH SYNERGY (dragon + mana generation)
+- Example: Temur Ascendancy in a deck with many power 4+ creatures = HIGH SYNERGY (draw engine)
+
+CUT PRIORITIES (what to suggest cutting FIRST):
+1. Generic goodstuff with no specific synergy to the deck's strategy
+2. High CMC cards that don't advance the win condition
+3. Redundant effects (if you have 8 removal spells, cutting 1 is fine)
+4. Cards that don't match the deck's speed/tempo
+5. Cards with anti-synergy (works against the commander or key pieces)
+6. Weakest card in an over-represented category
+
+NEVER SUGGEST CUTTING:
+- Cards that reference the commander or primary creature type by name or type
+- Cards identified as part of a win condition or combo
+- Cards that are part of a synergy loop (e.g., Savage Ventmaw + Aggravated Assault)
+- Core mana infrastructure (Sol Ring, Arcane Signet, Command Tower)
+- Cards with tribal payoffs in a tribal deck
+"""
+
+STRATEGIC_CONTEXT = """
+STRATEGIC DECK ANALYSIS:
+Before making any recommendations, analyze the deck's strategic identity:
+
+1. COMMANDER ROLE: What does the commander do? What strategy does it enable?
+   - Read the commander's abilities and determine the optimal game plan
+   - The Ur-Dragon: eminence reduces dragon costs, attack trigger draws and cheats permanents into play
+     → Strategy: ramp into dragons, attack to generate value, overwhelm with large flyers
+
+2. WIN CONDITIONS: How does this deck actually win?
+   - Combat damage (go wide with tokens, go tall with big creatures, commander damage)
+   - Combo (infinite loops, instant wins)
+   - Value/attrition (outgrind opponents with card advantage)
+   - Alternative wins (mill, poison, Thassa's Oracle, Revel in Riches)
+
+3. KEY SYNERGIES: What card interactions are central to the deck?
+   - Tribal triggers (Dragon Tempest + dragons entering = damage + haste)
+   - Mana loops (Savage Ventmaw + extra combats)
+   - Value engines (Temur Ascendancy + big creatures = card draw)
+
+4. STRATEGIC DESCRIPTION: If the deck has a description, treat it as the player's stated intent
+   and align all recommendations with that intent
+
+When the deck description is vague or missing, INFER the strategy from:
+- The commander's abilities (this is the MOST important signal)
+- Creature type concentration (many dragons = dragon tribal synergy matters)
+- Card type distribution (heavy creatures = combat, heavy instants = control)
+- Mana curve shape (low = aggro, high = ramp into bombs)
+
+ALWAYS state your understanding of the deck's strategy in your summary.
+This shows the user you understand their deck and builds trust in your suggestions.
+"""

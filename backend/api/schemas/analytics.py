@@ -21,6 +21,19 @@ class Composition(BaseModel):
     total: int
 
 
+class CardRole(BaseModel):
+    name: str
+    primary_role: str
+    secondary_roles: list[str] = []
+    synergy_notes: Optional[str] = None
+
+
+class RoleClassification(BaseModel):
+    role_distribution: dict[str, int]
+    card_roles: list[CardRole] = []
+    primary_creature_type: Optional[str] = None
+
+
 class AnalyticsResponse(BaseModel):
     total_cards: int
     unique_cards: int

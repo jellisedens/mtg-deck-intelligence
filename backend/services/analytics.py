@@ -26,12 +26,13 @@ TYPE_CATEGORIES = [
 ]
 
 
-async def compute_analytics(deck_cards: list) -> dict:
+async def compute_analytics(deck_cards: list, include_card_data: bool = False) -> dict:
     """
     Compute full analytics for a deck.
 
     Args:
         deck_cards: list of DeckCard ORM objects (from the database)
+        include_card_data: if True, include full card data in response (for AI context)
 
     Returns:
         dict with all analytics data
@@ -75,7 +76,7 @@ async def compute_analytics(deck_cards: list) -> dict:
     avg_cmc = _compute_average_cmc(expanded_cards)
     composition = _compute_composition(deck_cards)
 
-    return {
+    result = {
         "total_cards": sum(c.quantity for c in deck_cards),
         "unique_cards": len(deck_cards),
         "cards_not_found": not_found,
@@ -87,16 +88,21 @@ async def compute_analytics(deck_cards: list) -> dict:
         "composition": composition,
     }
 
+    # Include card lookup for AI context if requested
+    if include_card_data:
+        result["_card_lookup"] = card_lookup
+
+    return result
+
 
 def _compute_mana_curve(expanded_cards: list) -> dict:
     """Count non-land cards at each CMC from 0 to 7+."""
-    curve = {str(i): 0 for i in range(8)}  # "0" through "7+"
+    curve = {str(i): 0 for i in range(8)}
 
     for entry in expanded_cards:
         card = entry["card_data"]
         type_line = card.get("type_line", "")
 
-        # Skip lands — they don't have a mana cost
         if "Land" in type_line:
             continue
 
@@ -106,7 +112,6 @@ def _compute_mana_curve(expanded_cards: list) -> dict:
         else:
             curve[str(cmc)] = curve.get(str(cmc), 0) + 1
 
-    # Clean up: rename "7" key to "7+" if needed
     if "7" in curve and "7+" not in curve:
         curve["7+"] = curve.pop("7")
     elif "7" in curve and "7+" in curve:
@@ -128,13 +133,11 @@ def _compute_color_distribution(expanded_cards: list) -> dict:
 
         symbols = MANA_SYMBOL_PATTERN.findall(mana_cost)
         for symbol in symbols:
-            # Handle hybrid mana like {W/U} — count both colors
             parts = symbol.split("/")
             for part in parts:
                 if part in COLORS:
                     distribution[part] += 1
 
-    # Add color names for readability
     result = {}
     for color in COLORS:
         result[color] = {
@@ -159,7 +162,7 @@ def _compute_type_distribution(expanded_cards: list) -> dict:
             if type_cat in type_line:
                 distribution[type_cat] += 1
                 matched = True
-                break  # Count each card in its primary type only
+                break
 
         if not matched:
             other += 1
@@ -186,19 +189,16 @@ def _compute_mana_base(expanded_cards: list) -> dict:
 
     land_count = len(lands)
 
-    # Count color sources from lands
     color_sources = {c: 0 for c in COLORS}
     for land in lands:
-        # Check color_identity to determine what colors a land can produce
         color_identity = land.get("color_identity", [])
-        # Also check oracle text for mana production
         oracle = land.get("oracle_text", "").lower()
 
         for color in COLORS:
             color_lower = {"W": "white", "U": "blue", "B": "black", "R": "red", "G": "green"}
             if color in color_identity:
                 color_sources[color] += 1
-            elif color_lower[color] in oracle or f"add {{{color}}}" in card.get("oracle_text", ""):
+            elif color_lower[color] in oracle or f"add {{{color.lower()}}}" in oracle:
                 color_sources[color] += 1
 
     return {

@@ -153,8 +153,8 @@ async def simulate_and_analyze(
     turns: int = 10,
 ):
     """
-    Run a full game simulation and generate an AI-powered analysis
-    with plain-English insights and recommendations.
+    Convenience endpoint: runs simulation + AI analysis in one call.
+    Equivalent to calling /simulate/game then /simulate/interpret.
     """
     if n_games < 1 or n_games > 1000:
         raise HTTPException(status_code=400, detail="Games must be between 1 and 1000")
@@ -165,7 +165,6 @@ async def simulate_and_analyze(
 
     main_deck, sim_tags = await _build_deck_for_simulation(deck_id, user, db)
 
-    # Run simulation
     sim_results = run_simulation(
         deck_cards=main_deck,
         sim_tags=sim_tags,
@@ -173,7 +172,6 @@ async def simulate_and_analyze(
         turns=turns,
     )
 
-    # Generate AI analysis
     deck_info = {
         "name": deck.name,
         "format": deck.format,
@@ -190,3 +188,68 @@ async def simulate_and_analyze(
         "simulation": sim_results,
         "analysis": analysis,
     }
+
+@router.post("/{deck_id}/simulate/interpret")
+async def interpret_simulation(
+    deck_id: UUID,
+    simulation_data: dict,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Interpret existing simulation results with AI analysis.
+    Pass in the raw output from /simulate/game — no re-simulation needed.
+    """
+    deck = db.query(Deck).filter(Deck.id == deck_id).first()
+    if not deck:
+        raise HTTPException(status_code=404, detail="Deck not found")
+    if deck.user_id != user.id:
+        raise HTTPException(status_code=403, detail="Not your deck")
+
+    deck_info = {
+        "name": deck.name,
+        "format": deck.format,
+        "description": deck.description,
+    }
+
+    analysis = analyze_simulation(
+        simulation_data=simulation_data,
+        deck_info=deck_info,
+        strategy_profile=deck.strategy_profile,
+    )
+
+    if "error" in analysis:
+        raise HTTPException(status_code=502, detail=f"Analysis failed: {analysis['error']}")
+
+    return analysis
+
+@router.post("/{deck_id}/simulate/regenerate-tags")
+async def regenerate_sim_tags_endpoint(
+    deck_id: UUID,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Force regeneration of simulation tags for a deck.
+    Use this after making changes to the deck's cards.
+    """
+    deck = db.query(Deck).filter(Deck.id == deck_id).first()
+    if not deck:
+        raise HTTPException(status_code=404, detail="Deck not found")
+    if deck.user_id != user.id:
+        raise HTTPException(status_code=403, detail="Not your deck")
+
+    deck_cards = db.query(DeckCard).filter(DeckCard.deck_id == deck.id).all()
+
+    identifiers = [{"id": card.scryfall_id} for card in deck_cards]
+    scryfall_data = await scryfall_service.get_collection(identifiers)
+    card_lookup = {c["id"]: c for c in scryfall_data.get("data", [])}
+
+    sim_tags = generate_sim_tags(deck_cards, card_lookup)
+
+    profile = deck.strategy_profile or {}
+    profile["sim_tags"] = sim_tags
+    deck.strategy_profile = profile
+    db.commit()
+
+    return {"status": "ok", "tags_generated": len(sim_tags)}

@@ -134,6 +134,11 @@ def add_card(
 
     if existing:
         existing.quantity += request.quantity
+        if deck.strategy_profile and "sim_tags" in (deck.strategy_profile or {}):
+            profile = dict(deck.strategy_profile)
+            profile.pop("sim_tags", None)
+            profile.pop("role_data", None)
+            deck.strategy_profile = profile
         db.commit()
         db.refresh(existing)
         return existing
@@ -146,6 +151,12 @@ def add_card(
         board=request.board,
     )
     db.add(card)
+    # Invalidate cached sim tags and role data since deck changed
+    if deck.strategy_profile and "sim_tags" in (deck.strategy_profile or {}):
+        profile = dict(deck.strategy_profile)
+        profile.pop("sim_tags", None)
+        profile.pop("role_data", None)
+        deck.strategy_profile = profile
     db.commit()
     db.refresh(card)
     return card
@@ -183,6 +194,11 @@ def update_card(
     if request.board is not None:
         card.board = request.board
 
+    if deck.strategy_profile and "sim_tags" in (deck.strategy_profile or {}):
+        profile = dict(deck.strategy_profile)
+        profile.pop("sim_tags", None)
+        profile.pop("role_data", None)
+        deck.strategy_profile = profile
     db.commit()
     db.refresh(card)
     return card
@@ -207,4 +223,9 @@ def remove_card(
         raise HTTPException(status_code=404, detail="Card not found in this deck")
 
     db.delete(card)
+    if deck.strategy_profile and "sim_tags" in (deck.strategy_profile or {}):
+        profile = dict(deck.strategy_profile)
+        profile.pop("sim_tags", None)
+        profile.pop("role_data", None)
+        deck.strategy_profile = profile
     db.commit()

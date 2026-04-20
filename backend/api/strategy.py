@@ -59,12 +59,29 @@ async def generate_deck_strategy(
     if "error" in profile:
         raise HTTPException(status_code=502, detail=f"Strategy generation failed: {profile['error']}")
 
-    # Save to database
+    # Generate simulation tags (cached for future simulations)
+    from simulation.sim_tags import generate_sim_tags
+    sim_tags = generate_sim_tags(cards, card_lookup)
+    profile["sim_tags"] = sim_tags
+
+    # Include role classification data
+    profile["role_data"] = {
+        "role_distribution": role_data.get("role_distribution", {}),
+        "card_roles": role_data.get("card_roles", []),
+        "primary_creature_type": role_data.get("primary_creature_type"),
+    }
+
+    # Save everything to database
     deck.strategy_profile = profile
     db.commit()
     db.refresh(deck)
 
-    return profile
+    # Return profile without sim_tags (too large for response)
+    response = {k: v for k, v in profile.items() if k != "sim_tags"}
+    response["sim_tags_generated"] = len(sim_tags)
+    response["roles_classified"] = len(role_data.get("card_roles", []))
+
+    return response
 
 
 @router.get("/{deck_id}/strategy", response_model=dict)

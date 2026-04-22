@@ -35,64 +35,60 @@ def generate_sim_tags(deck_cards: list, card_lookup: dict) -> dict:
             "produced_mana": full_data.get("produced_mana", []),
         })
 
-    system = f"""You are a Magic: The Gathering rules engine. For each card, generate structured
-simulation tags that describe its mechanical effects in a format a game simulator can execute.
-
-REFERENCE THESE PATTERNS — they are authoritative and override your general knowledge:
-
-{SIM_TAG_PATTERNS}
-
-Respond with ONLY valid JSON (no markdown, no backticks):
-{{{{
+    json_format = """
+Respond with ONLY valid JSON (no markdown, no backticks). Use this structure:
+{
     "cards": [
-        {{{{
+        {
             "name": "Card Name",
-            "sim_tags": {{{{
-                "cast_cost": {{{{"total": 3, "colors": {{{{"G": 1}}}}}}}}}}} or null for lands,
+            "sim_tags": {
+                "cast_cost": {"total": 3, "colors": {"G": 1}} or null for lands,
                 "is_land": false,
                 "permanent": true,
                 "enters_tapped": false,
-                "mana_production": null or {{{{
+                "mana_production": null or {
                     "type": "tap",
-                    "produces": {{{{"R": 1}}}}}} or null,
+                    "produces": {"R": 1} or null,
                     "produces_choice": ["R", "G"] or null,
                     "produces_any": false,
                     "amount": 1
-                }}}}}},
+                },
                 "on_resolve": [],
                 "on_etb": [],
                 "on_attack": [],
                 "power": 5 or null,
                 "toughness": 5 or null,
                 "static_effects": []
-            }}}}
-        }}}}
+            }
+        }
     ]
-}}}}
+}
 
 AVAILABLE ACTIONS for on_resolve, on_etb, on_attack:
-- {{{{"action": "draw", "count": N}}}}
-- {{{{"action": "put_back", "count": N, "destination": "top_of_library"}}}}
-- {{{{"action": "search_land", "count": N, "destination": "battlefield" or "hand", "enters_tapped": true/false, "land_type": "basic" or "forest" or "any"}}}}
-- {{{{"action": "shuffle_library"}}}}
-- {{{{"action": "create_token", "count": N, "token": {{{{"type": "Treasure"}}}}}} or {{{{"type": "Creature", "power": N, "toughness": N}}}}}}}}}}
-- {{{{"action": "add_mana", "mana": {{{{"R": 1, "G": 1}}}}}}}}}}
-- {{{{"action": "destroy", "target": "creature" or "all_non_type"}}}}
-- {{{{"action": "exile", "target": "creature" or "any"}}}}
-- {{{{"action": "scry", "count": N}}}}
-- {{{{"action": "deal_damage", "amount": N, "target": "any"}}}}
+- {"action": "draw", "count": N}
+- {"action": "put_back", "count": N, "destination": "top_of_library"}
+- {"action": "search_land", "count": N, "destination": "battlefield" or "hand", "enters_tapped": true/false, "land_type": "basic" or "forest" or "any"}
+- {"action": "shuffle_library"}
+- {"action": "create_token", "count": N, "token": {"type": "Treasure"} or {"type": "Creature", "power": N, "toughness": N}}
+- {"action": "add_mana", "mana": {"R": 1, "G": 1}}
+- {"action": "destroy", "target": "creature" or "all_non_type"}
+- {"action": "exile", "target": "creature" or "any"}
+- {"action": "scry", "count": N}
+- {"action": "deal_damage", "amount": N, "target": "any"}
 
 AVAILABLE STATIC EFFECTS:
-- {{{{"effect": "cost_reduction", "applies_to": "dragon" or "creature" or "all", "amount": 1}}}}
-- {{{{"effect": "haste", "applies_to": "dragon" or "creature"}}}}
-- {{{{"effect": "draw_on_creature_etb", "condition": "power_3_or_greater" or "power_4_or_greater" or "any"}}}}
-- {{{{"effect": "draw_on_combat_damage"}}}}
-- {{{{"effect": "damage_on_creature_etb", "damage_source": "entering_creature_power"}}}}
-- {{{{"effect": "token_on_dragon_etb", "token": {{{{"type": "Creature", "power": 5, "toughness": 5}}}}}}}}}}
-- {{{{"effect": "lands_produce_any_color"}}}}
-- {{{{"effect": "additional_land_drop", "count": 1}}}}
-- {{{{"effect": "mana_doubling"}}}}
+- {"effect": "cost_reduction", "applies_to": "dragon" or "creature" or "all", "amount": 1}
+- {"effect": "haste", "applies_to": "dragon" or "creature"}
+- {"effect": "draw_on_creature_etb", "condition": "power_3_or_greater" or "power_4_or_greater" or "any"}
+- {"effect": "draw_on_combat_damage"}
+- {"effect": "damage_on_creature_etb", "damage_source": "entering_creature_power"}
+- {"effect": "token_on_dragon_etb", "token": {"type": "Creature", "power": 5, "toughness": 5}}
+- {"effect": "lands_produce_any_color"}
+- {"effect": "additional_land_drop", "count": 1}
+- {"effect": "mana_doubling"}
+"""
 
+    rules = """
 RULES:
 - cast_cost is null for lands
 - is_land is true only for Land type cards
@@ -106,6 +102,15 @@ RULES:
 - power/toughness: include for creatures, null for non-creatures
 - ALWAYS reference the pattern knowledge base above before generating tags
 """
+
+    system = (
+        "You are a Magic: The Gathering rules engine. For each card, generate structured "
+        "simulation tags that describe its mechanical effects in a format a game simulator can execute.\n\n"
+        "REFERENCE THESE PATTERNS — they are authoritative and override your general knowledge:\n\n"
+        + SIM_TAG_PATTERNS + "\n\n"
+        + json_format + "\n\n"
+        + rules
+    )
 
     all_tags = {}
     batch_size = 25

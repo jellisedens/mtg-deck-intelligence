@@ -10,45 +10,39 @@ import json
 from openai import OpenAI
 from services.scryfall import scryfall_service
 from services.analytics import compute_analytics
-from data.mtg_glossary import GLOSSARY, CLARIFICATIONS, REPLACEMENT_GUIDE, SYNERGY_RULES, STRATEGIC_CONTEXT
 from services.role_classifier import classify_deck_roles
+from services.deck_context import build_deck_context, build_simulation_context
+from services.cut_analyzer import build_cut_context
+from data.mtg_glossary import GLOSSARY, CLARIFICATIONS, REPLACEMENT_GUIDE, SYNERGY_RULES, STRATEGIC_CONTEXT
 
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 MODEL = "gpt-4o-mini"
 
 
-async def get_suggestions(prompt: str, deck_cards: list = None, deck_info: dict = None) -> dict:
+async def get_suggestions(prompt: str, deck_cards: list = None, deck_info: dict = None,
+                          simulation_data: dict = None) -> dict:
     """
     Main entry point for AI suggestions.
-
-    Args:
-        prompt: User's natural language request
-        deck_cards: Optional list of DeckCard ORM objects for deck context
-        deck_info: Optional dict with deck name, format, description
     """
-    # Check if the prompt matches a broad term that needs clarification
     clarification = _check_for_clarification(prompt)
     if clarification:
         return clarification
 
-    # Build deck context if we have cards
     deck_context = None
     analytics = None
     role_data = None
+    card_lookup = None
     if deck_cards:
         analytics = await compute_analytics(deck_cards, include_card_data=True)
         card_lookup = analytics.pop("_card_lookup", {})
         role_data = classify_deck_roles(deck_cards, card_lookup, deck_info)
-        deck_context = _build_deck_context(deck_cards, deck_info, analytics, card_lookup, role_data)
+        deck_context = build_deck_context(deck_cards, deck_info, analytics, card_lookup, role_data)
 
-    # Step 1: Ask AI to interpret the request and build a plan
     plan = _get_ai_plan(prompt, deck_context)
 
     if "error" in plan:
         return plan
 
-    # Step 2: Execute Scryfall searches from the plan
-    # Build set of existing card names for duplicate filtering
     existing_cards = set()
     if deck_cards:
         for card in deck_cards:
@@ -59,7 +53,6 @@ async def get_suggestions(prompt: str, deck_cards: list = None, deck_info: dict 
         exclude_cards=existing_cards,
     )
 
-    # Low-results fallback: if under 20 results, broaden the search
     if len(search_results) < 20:
         broader_plan = _get_broader_queries(prompt, plan, deck_context)
         if broader_plan and broader_plan.get("scryfall_queries"):
@@ -67,16 +60,13 @@ async def get_suggestions(prompt: str, deck_cards: list = None, deck_info: dict 
                 queries=broader_plan.get("scryfall_queries", []),
                 exclude_cards=existing_cards,
             )
-            # Merge results, avoiding duplicates
             seen_ids = {r["scryfall_id"] for r in search_results}
             for result in additional_results:
                 if result["scryfall_id"] not in seen_ids:
                     search_results.append(result)
                     seen_ids.add(result["scryfall_id"])
-            # Re-sort by EDHREC rank
             search_results.sort(key=lambda c: c.get("edhrec_rank") or 999999)
 
-    # Step 3: Ask AI to analyze results and give final recommendations
     recommendations = _get_ai_recommendations(
         prompt=prompt,
         plan=plan,
@@ -84,17 +74,19 @@ async def get_suggestions(prompt: str, deck_cards: list = None, deck_info: dict 
         deck_context=deck_context,
         role_data=role_data,
         deck_info=deck_info,
+        simulation_data=simulation_data,
+        card_lookup=card_lookup,
+        deck_cards=deck_cards,
     )
 
-    # Include debug info
     recommendations["debug"] = {
         "mode": plan.get("mode"),
         "reasoning": plan.get("reasoning"),
         "scryfall_queries": plan.get("scryfall_queries", []),
         "total_search_results": len(search_results),
+        "simulation_informed": simulation_data is not None,
     }
 
-    # Include role distribution in debug if available
     if role_data:
         recommendations["debug"]["role_distribution"] = role_data.get("role_distribution", {})
         recommendations["debug"]["primary_creature_type"] = role_data.get("primary_creature_type")
@@ -103,11 +95,7 @@ async def get_suggestions(prompt: str, deck_cards: list = None, deck_info: dict 
 
 
 def _check_for_clarification(prompt: str) -> dict | None:
-    """
-    Check if the user's prompt is a broad term that would benefit
-    from clarification before searching.
-    Returns a clarification response or None if no clarification needed.
-    """
+    """Check if the prompt needs clarification before searching."""
     prompt_lower = prompt.lower().strip()
 
     for term, config in CLARIFICATIONS.items():
@@ -147,9 +135,7 @@ def _check_for_clarification(prompt: str) -> dict | None:
 
 
 def _get_broader_queries(prompt: str, original_plan: dict, deck_context: str = None) -> dict:
-    """
-    When initial queries return too few results, ask the AI to generate broader queries.
-    """
+    """When initial queries return too few results, generate broader queries."""
     system = """You are a Scryfall query expert. The previous search returned fewer than 20 results.
 Generate 2-3 BROADER queries that cover the same strategic intent but cast a wider net.
 
@@ -170,7 +156,15 @@ Original queries that returned too few results: {json.dumps(original_plan.get('s
 Original reasoning: {original_plan.get('reasoning', '')}"""
 
     if deck_context:
-        user_msg += f"\n\nDeck context:\n{deck_context}"
+        if is_cut_focused:
+            # For cut requests, truncate deck context to save tokens
+            context_lines = deck_context.split("\n")
+            # Keep strategy profile and analytics, trim individual card oracle text
+            trimmed_context = "\n".join(line for line in context_lines
+                                        if not line.strip().startswith("Text:"))
+            user_msg += f"\nDeck context:\n{trimmed_context}"
+        else:
+            user_msg += f"\nDeck context:\n{deck_context}"
 
     try:
         response = client.chat.completions.create(
@@ -188,113 +182,8 @@ Original reasoning: {original_plan.get('reasoning', '')}"""
         return None
 
 
-def _build_deck_context(deck_cards: list, deck_info: dict, analytics: dict,
-                        card_lookup: dict = None, role_data: dict = None) -> str:
-    """Build a rich text summary of the deck for the AI prompt."""
-    lines = []
-
-    if deck_info:
-        lines.append(f"Deck: {deck_info.get('name', 'Unknown')}")
-        lines.append(f"Format: {deck_info.get('format', 'Unknown')}")
-        if deck_info.get("description"):
-            lines.append(f"Strategy: {deck_info['description']}")
-        if deck_info.get("strategy_profile"):
-            profile = deck_info["strategy_profile"]
-            lines.append(f"\n=== STRATEGIC PROFILE ===")
-            lines.append(f"Commander role: {profile.get('commander_role', 'Unknown')}")
-            lines.append(f"Primary strategy: {profile.get('primary_strategy', 'Unknown')}")
-            lines.append(f"Win conditions: {json.dumps(profile.get('win_conditions', []))}")
-            key_synergies = profile.get("key_synergies", [])
-            if key_synergies:
-                lines.append("Key synergies:")
-                for syn in key_synergies[:5]:
-                    lines.append(f"  - {' + '.join(syn.get('cards', []))}: {syn.get('description', '')}")
-            lines.append(f"Critical cards (never cut): {json.dumps(profile.get('critical_cards', []))}")
-            lines.append(f"Weaknesses: {json.dumps(profile.get('weaknesses', []))}")
-            role_needs = profile.get("role_needs", {})
-            if role_needs.get("needs_more"):
-                lines.append(f"Needs more: {json.dumps(role_needs['needs_more'])}")
-            if role_needs.get("over_saturated"):
-                lines.append(f"Over-saturated: {json.dumps(role_needs['over_saturated'])}")
-            lines.append(f"Cut guidance: {profile.get('cut_guidance', 'None')}")
-            lines.append(f"=== END STRATEGIC PROFILE ===\n")
-
-    lines.append(f"\nTotal cards: {analytics.get('total_cards', 0)}")
-    lines.append(f"Average CMC: {analytics.get('average_cmc', 0)}")
-
-    # Role distribution (strategic categories)
-    if role_data:
-        lines.append(f"\nPrimary creature type: {role_data.get('primary_creature_type', 'None')}")
-        lines.append("\nStrategic role distribution:")
-        role_dist = role_data.get("role_distribution", {})
-        for role, count in sorted(role_dist.items(), key=lambda x: -x[1]):
-            if count > 0:
-                lines.append(f"  {role}: {count}")
-
-    # Card list with oracle text and roles
-    lines.append("\nCurrent deck list:")
-    role_lookup = {}
-    if role_data:
-        for cr in role_data.get("card_roles", []):
-            role_lookup[cr["name"].lower()] = cr
-
-    for card in deck_cards:
-        role_info = role_lookup.get(card.card_name.lower(), {})
-        primary_role = role_info.get("primary_role", "unknown")
-        secondary = role_info.get("secondary_roles", [])
-        synergy = role_info.get("synergy_notes", "")
-
-        # Get oracle text from card lookup
-        oracle_text = ""
-        if card_lookup:
-            full_data = card_lookup.get(card.scryfall_id, {})
-            oracle_text = full_data.get("oracle_text", "")
-
-        role_str = f"[{primary_role}]"
-        if secondary:
-            role_str += f" (also: {', '.join(secondary)})"
-
-        lines.append(f"  {card.quantity}x {card.card_name} ({card.board}) {role_str}")
-        if oracle_text:
-            lines.append(f"     Text: {oracle_text[:120]}")
-        if synergy:
-            lines.append(f"     Synergy: {synergy}")
-
-    # Deck identity
-    identity = analytics.get("deck_identity", {})
-    if identity:
-        lines.append(f"\nDeck identity: {identity.get('recommendation_weight', 'balanced')}")
-        lines.append(f"Non-land breakdown: {json.dumps(identity.get('type_percentages', {}))}")
-        lines.append(f"Spells (instant+sorcery): {identity.get('spell_count', 0)} | Permanents (creature+enchantment+artifact+planeswalker): {identity.get('permanent_count', 0)} ({identity.get('spell_vs_permanent', 'balanced')})")
-        lines.append(f"IMPORTANT: This deck is {identity.get('recommendation_weight', 'balanced')} — all suggestions for ramp, draw, removal, and utility should align with this identity")
-
-    # Mana curve
-    curve = analytics.get("mana_curve", {})
-    lines.append(f"\nMana curve: {json.dumps(curve)}")
-
-    # Color distribution
-    colors = analytics.get("color_distribution", {})
-    color_summary = {c: info["count"] for c, info in colors.items() if info["count"] > 0}
-    lines.append(f"Color symbols in mana costs: {json.dumps(color_summary)}")
-
-    # Type distribution
-    types = analytics.get("type_distribution", {})
-    type_summary = {t: c for t, c in types.items() if c > 0}
-    lines.append(f"Card types: {json.dumps(type_summary)}")
-
-    # Mana base
-    mana_base = analytics.get("mana_base", {})
-    lines.append(f"Lands: {mana_base.get('land_count', 0)} ({mana_base.get('land_percentage', 0)}%)")
-    lines.append(f"Color sources: {json.dumps(mana_base.get('color_sources', {}))}")
-
-    return "\n".join(lines)
-
-
 def _get_ai_plan(prompt: str, deck_context: str = None) -> dict:
-    """
-    Ask AI to interpret the user's request and create a plan.
-    Returns Scryfall queries to execute and the approach to take.
-    """
+    """Ask AI to interpret the request and create a search plan."""
     system = f"""You are an expert Magic: The Gathering deck building advisor.
 Your job is to interpret the user's request and create a plan to help them.
 
@@ -334,15 +223,12 @@ CRITICAL — MULTI-QUERY COVERAGE:
 When a concept has multiple subcategories in the glossary (e.g., "ramp" includes mana dorks,
 mana rocks, land search spells, and cost reducers), you MUST generate at least one query per
 subcategory. This ensures the user gets a balanced mix of options, not just one type of card.
-For example, "ramp" should produce 3-4 queries covering different ramp strategies.
 
 {REPLACEMENT_GUIDE}
 
 LOW RESULTS SAFEGUARD:
 Always generate at least 3-4 queries to ensure sufficient results.
-If your queries are very specific (e.g., narrow oracle text + price filter + type filter),
-also include 1-2 broader fallback queries that relax some constraints.
-This ensures EDHREC ranking has enough cards to meaningfully sort and surface the best options.
+If your queries are very specific, also include 1-2 broader fallback queries.
 """
 
     user_msg = f"User request: {prompt}"
@@ -358,11 +244,9 @@ This ensures EDHREC ranking has enough cards to meaningfully sort and surface th
             ],
             temperature=0.3,
         )
-
         content = response.choices[0].message.content.strip()
         content = content.replace("```json", "").replace("```", "").strip()
         return json.loads(content)
-
     except json.JSONDecodeError as e:
         return {"error": "ai_parse_error", "details": f"Failed to parse AI response: {str(e)}"}
     except Exception as e:
@@ -411,16 +295,14 @@ async def _execute_searches(queries: list, exclude_cards: set = None) -> list:
             })
 
     all_results.sort(key=lambda c: c.get("edhrec_rank") or 999999)
-
     return all_results
 
 
 def _get_ai_recommendations(prompt: str, plan: dict, search_results: list,
                             deck_context: str = None, role_data: dict = None,
-                            deck_info: dict = None) -> dict:
-    """
-    Ask AI to analyze Scryfall results and give final recommendations.
-    """
+                            deck_info: dict = None, simulation_data: dict = None,
+                            card_lookup: dict = None, deck_cards: list = None) -> dict:
+    """Ask AI to analyze Scryfall results and give final recommendations."""
     max_results = plan.get("max_results", 10)
 
     system = f"""You are an expert Magic: The Gathering deck building advisor.
@@ -441,8 +323,8 @@ You must respond with ONLY valid JSON (no markdown, no backticks) in this format
     ],
     "cuts": [
         {{
-            "card_name": "Card to consider removing",
-            "reasoning": "Why this card could be replaced — must explain lack of synergy"
+            "card_name": "Card name from CUT CANDIDATES list",
+            "reasoning": "Why this is cuttable — cite its impact score and what the deck loses"
         }}
     ],
     "strategy_notes": "Overall strategic advice for the deck"
@@ -452,93 +334,58 @@ Rules:
 - Only suggest cards that appear in the search results provided
 - Include the exact scryfall_id from the search results
 - Order suggestions by priority (best first)
-- Cards are sorted by EDHREC popularity (most-played first) — prefer cards near the top of the list as they are proven Commander staples used by thousands of players
-- All cards already in the user's deck have been pre-filtered out — do not worry about duplicates
+- Cards are sorted by EDHREC popularity (most-played first) — prefer cards near the top
+- All cards already in the user's deck have been pre-filtered out
 - NEVER suggest a card that does not have a matching scryfall_id in the search results
 - If the user has a deck, suggest cuts only when relevant
 - Include price info when the user mentions budget
 - Be specific about WHY each card is good, referencing synergies with existing cards by name
 - Provide a MIX of card types when the concept spans multiple categories
-- When deck analytics are provided, ALWAYS reference specific numbers in your summary and reasoning:
-  - Mana base: cite land count, land percentage, and color source counts
-  - Color distribution: identify which colors are over/under-represented
-  - Mana curve: note if the curve is too high or too low and suggest accordingly
-  - Type distribution: flag if there are too few creatures, too little interaction, etc.
-  - Example: "Your deck has 34 lands (34%) with only 8 white sources for 13 white pips — you need more white-producing mana rocks"
-- Start your summary with a brief deck diagnosis when analytics are available, then lead into recommendations
+- When deck analytics are provided, ALWAYS reference specific numbers in your summary
+- Start your summary with a brief deck diagnosis when analytics are available
 - MANA COST OPTIMIZATION:
-  - Reference the deck's average CMC and mana curve in your reasoning
-  - If average CMC is above 3.5, prefer lower-cost suggestions that help smooth out the curve
-  - If average CMC is below 2.5, the deck is aggressive — suggest efficient low-cost options
-  - When two cards fill the same role, prefer the one with lower CMC unless the higher-cost version is significantly more powerful
-  - Flag when a suggestion would increase an already-high average CMC (e.g., "Note: at CMC 5, this adds to your already high curve")
-  - For a deck with average CMC 4+, prioritize cards with CMC 3 or less for non-creature roles (draw, ramp, removal)
+  - If average CMC is above 3.5, prefer lower-cost suggestions
+  - When two cards fill the same role, prefer lower CMC unless the expensive one is significantly better
+  - For a deck with average CMC 4+, prioritize cards with CMC 3 or less for non-creature roles
 - MATCH SUGGESTIONS TO DECK IDENTITY:
-  - The deck context includes a "deck identity" section showing the dominant card type
-  - If the deck is "permanent-heavy" (more creatures/enchantments/artifacts than instants/sorceries):
-    - Suggest draw that triggers off creatures entering, attacking, or dying
-    - Suggest ramp creatures (mana dorks) over ramp sorceries
-    - Suggest removal on creature bodies (Ravenous Chupacabra) over pure instants when possible
-    - NEVER suggest spellslinger cards (e.g., Archmage Emeritus, Guttersnipe) for permanent-heavy decks
-  - If the deck is "spell-heavy" (more instants/sorceries than permanents):
-    - Suggest draw cantrips and spell-based engines
-    - Suggest cost reducers for instants/sorceries (Baral, Goblin Electromancer)
-    - Suggest ramp that synergizes with casting spells
-  - The deck identity percentage tells you how strongly to weight this — a deck that is 45% creatures should get mostly creature-based suggestions, a balanced deck can get a mix
-  - Reference the specific numbers in your reasoning
+  - If permanent-heavy: suggest creature-based draw, ramp creatures, removal on bodies
+  - If spell-heavy: suggest cantrips, spell-based engines, instant/sorcery cost reducers
+  - NEVER suggest spellslinger cards for permanent-heavy decks or vice versa
 - UNDERSTAND THE DIFFERENCE between ramp and color fixing:
-  - Ramp = any card that accelerates mana production (colorless mana rocks count)
-  - Color fixing = cards that produce COLORED mana, specifically colors the deck needs
-  - When the user asks for "color fixing" or "mana fixing," do NOT suggest cards that only produce colorless mana
-  - Reference the deck's color source gaps when recommending fixing
+  - When the user asks for "color fixing," do NOT suggest colorless-only mana sources
+- SIMULATION-INFORMED DECISIONS:
+  When SIMULATION PERFORMANCE DATA is provided, use actual performance numbers:
+  - If mana_on_curve_rate < 70% on turn 3: never suggest cutting ramp
+  - If a color has < 60% access by turn 5: prioritize fixing for it
+  - If avg_uncastable_cards > 3 by turn 5: suggest lower CMC cards
+  - ALWAYS cite specific simulation numbers in your reasoning
+  - Cross-reference simulation data with cut decisions
 
 {SYNERGY_RULES}
 
 {STRATEGIC_CONTEXT}
 
-HOW TO IDENTIFY GOOD CUTS:
-Before suggesting ANY cuts, analyze the deck's strategic needs:
-
-STEP 1 — DETERMINE WHAT THE DECK CANNOT AFFORD TO LOSE:
-- Check the commander's CMC. If it's 5+, ramp is CRITICAL — never cut ramp below 10 sources
-- Check the deck identity. If permanent-heavy (creature deck), cutting creatures weakens the core strategy
-- Check the average CMC. If 3.5+, the deck NEEDS ramp and mana fixing to function — protect those categories
-- Check card_draw count. If below 10, do not cut draw sources
-- Check removal count. If below 8, do not cut removal
-
-STEP 2 — IDENTIFY OVER-REPRESENTED OR LOW-IMPACT CATEGORIES:
-Look at the role_distribution and the cut candidates list. Good cuts come from:
-1. ROLE REDUNDANCY: Categories with 12+ cards can afford to lose one. But NEVER cut a category below minimum thresholds (ramp: 10, draw: 8, removal: 6, lands: 33)
-2. UTILITY CARDS: Cards tagged as [utility] with no secondary roles are often the weakest links
-3. HIGH CMC + LOW IMPACT: Cards costing 5+ mana that don't directly win the game or generate massive value
-4. OFF-THEME: Cards that don't synergize with the commander, primary creature type, or stated strategy
-5. WORST-IN-CATEGORY: The weakest card in an over-represented category
-
-STEP 3 — EVALUATE CUTS IN CONTEXT:
-- For a 9-CMC commander like The Ur-Dragon: ramp, cost reducers, and mana fixing are ESSENTIAL — do not cut them
-- For a creature-heavy deck: avoid cutting creatures unless clearly redundant
-- For a tribal deck: never cut tribal payoffs or enablers
-- Compare what the cut does vs what the replacement does — the replacement must provide MORE value to the deck's strategy
-
-When suggesting cuts, you MUST:
-- Name a specific card from the "Current deck list" or "CUT CANDIDATES" list
-- Cite its role classification and explain why it's the weakest in that role
-- Explain why cutting this card won't hurt the deck's core strategy
-- Reference the role_distribution numbers to justify why the category can afford the loss
-- Suggest 2-3 cuts when the user asks — do not leave the cuts array empty
-- NEVER suggest cutting Sol Ring, Arcane Signet, Command Tower, or core mana infrastructure
-ABSOLUTE CUT RESTRICTIONS — OVERRIDE ALL OTHER CONSIDERATIONS:
-If the deck's primary creature type is identified in the role classification,
-the following cards must NEVER appear in the "cuts" list:
-- Any card with the creature type in its name (e.g., "Dragon Tempest" in a Dragon deck)
-- Any card classified as "tribal_synergy"
-- Any card whose oracle text mentions the primary creature type
-- Any card that gives the primary creature type haste, flying, or other keywords
-Violating this rule makes recommendations untrustworthy. When in doubt, do NOT suggest cutting it.
+USING IMPACT RATINGS FOR CUTS:
+If CARD IMPACT RATINGS are provided, they are authoritative for cut decisions:
+- ONLY suggest cutting cards rated 1-6 from the CUT CANDIDATES list
+- NEVER suggest cutting cards rated 7-10 (STRONG/CORE)
+- Always cite the impact score in your cut reasoning
+- If simulation shows a category is struggling, do NOT cut cards in that category
+- If all candidates score 5+, the deck is well-optimized — still suggest the lowest-scoring cards but warn about the tradeoff
+- Suggest 2-3 cuts when asked. If only 1 card is clearly cuttable, include the next-lowest scoring cards and note they are harder to cut.
+- When the user asks to "make room for" or "add more" of something, ALSO populate the suggestions array with matching cards from search results. Do NOT return empty suggestions when search results exist.
 """
 
-    # Trim search results to avoid token limits
-    trimmed_results = search_results[:80]
+    # Detect request type for context sizing
+    add_keywords = ["make room for", "add more", "swap in", "fit in", "include more"]
+    wants_additions = any(kw in prompt.lower() for kw in add_keywords)
+    is_cut_focused = "cut" in prompt.lower() and not wants_additions
+
+    # Trim search results — cut-only requests need fewer results
+    if is_cut_focused:
+        trimmed_results = search_results[:15]
+    else:
+        trimmed_results = search_results[:80]
 
     user_msg = f"User request: {prompt}\n\n"
     user_msg += f"AI plan: {json.dumps(plan)}\n\n"
@@ -553,41 +400,42 @@ Violating this rule makes recommendations untrustworthy. When in doubt, do NOT s
     if deck_context:
         user_msg += f"\nDeck context:\n{deck_context}"
 
-    # Add cut candidates for the AI to evaluate
-    if role_data and deck_context and "cut" in prompt.lower():
-        role_list = role_data.get("card_roles", [])
-        primary_type = (role_data.get("primary_creature_type") or "").lower()
-        role_dist = role_data.get("role_distribution", {})
-        
-        # Find over-represented categories
-        over_represented = {r: c for r, c in role_dist.items() if c >= 10 and r != "land" and r != "tribal_synergy"}
-        
-        # Build explicit cut candidates — cards that are NOT tribal synergy and NOT protected
-        cut_candidates = []
-        for cr in role_list:
-            name = cr.get("name", "")
-            primary_role = cr.get("primary_role", "")
-            secondary = cr.get("secondary_roles", [])
-            
-            # Skip protected cards
-            if primary_role == "tribal_synergy":
-                continue
-            if "tribal_synergy" in secondary:
-                continue
-            if primary_type and primary_type in name.lower():
-                continue
-            if primary_role == "land":
-                continue
-            
-            cut_candidates.append(f"- {name} [{primary_role}] (secondary: {secondary}) — {cr.get('synergy_notes', '')}")
-        
-        if over_represented:
-            user_msg += f"\n\nOver-represented roles (10+ cards): {json.dumps(over_represented)}"
-        
-        user_msg += f"\n\nCUT CANDIDATES (these are the ONLY cards you may suggest cutting — choose 2-3 of the weakest):\n"
-        user_msg += "\n".join(cut_candidates)
+    # Add simulation performance data
+    if simulation_data:
+        sim_context = build_simulation_context(simulation_data)
+        if sim_context:
+            user_msg += f"\n{sim_context}"
 
-    user_msg += f"\n\nProvide {max_results} suggestions (use the full amount, do not be conservative)."
+    # Add cut candidates from impact ratings
+    if deck_info and deck_context and "cut" in prompt.lower():
+        cut_context = build_cut_context(
+            deck_info=deck_info,
+            simulation_data=simulation_data,
+            deck_cards=deck_cards,
+            card_lookup=card_lookup,
+        )
+        if cut_context:
+            user_msg += f"\n\n{cut_context}"
+            print(f"CUT CONTEXT ADDED: {cut_context[:500]}")
+        else:
+            print("CUT CONTEXT: empty or None")
+    else:
+        print(f"CUT BLOCK SKIPPED: deck_info={bool(deck_info)}, deck_context={bool(deck_context)}, cut_in_prompt={'cut' in prompt.lower()}")
+        
+
+
+    # Build final instruction based on request type
+
+    if wants_additions and "cut" in prompt.lower():
+        user_msg += f"\n\nIMPORTANT — TWO-PART RESPONSE REQUIRED:"
+        user_msg += f"\n1. CUTS: You MUST suggest exactly 2-3 cards from the CUT CANDIDATES list above. Do NOT return an empty cuts array."
+        user_msg += f"\n2. SUGGESTIONS: You MUST suggest {max_results} cards from the search results. Do NOT return an empty suggestions array."
+        user_msg += f"\nBoth arrays being empty is WRONG. Fill both."
+    elif "cut" in prompt.lower():
+        user_msg += f"\n\nYou MUST suggest exactly 2-3 cards from the CUT CANDIDATES list above. Do NOT return an empty cuts array."
+        user_msg += f"\nAlso provide {max_results} suggestions if search results are available."
+    else:
+        user_msg += f"\n\nProvide {max_results} suggestions (use the full amount, do not be conservative)."
 
     try:
         response = client.chat.completions.create(
@@ -611,16 +459,13 @@ Violating this rule makes recommendations untrustworthy. When in doubt, do NOT s
             card_data = result_lookup.get(suggestion.get("scryfall_id"))
             suggested_name = suggestion.get("card_name", "").lower()
 
-            # Verify the scryfall_id actually matches the card name
             if card_data and card_data.get("name", "").lower() == suggested_name:
-                # ID and name match — use as-is
                 suggestion["image_uri"] = card_data.get("image_uris", {}).get("normal", "")
                 suggestion["mana_cost"] = card_data.get("mana_cost", "")
                 suggestion["type_line"] = card_data.get("type_line", "")
                 suggestion["price_usd"] = card_data.get("prices", {}).get("usd")
                 verified_suggestions.append(suggestion)
             elif suggested_name in name_lookup:
-                # AI used wrong ID but card exists in results — fix the ID
                 correct_data = name_lookup[suggested_name]
                 suggestion["scryfall_id"] = correct_data["scryfall_id"]
                 suggestion["image_uri"] = correct_data.get("image_uris", {}).get("normal", "")
@@ -628,7 +473,6 @@ Violating this rule makes recommendations untrustworthy. When in doubt, do NOT s
                 suggestion["type_line"] = correct_data.get("type_line", "")
                 suggestion["price_usd"] = correct_data.get("prices", {}).get("usd")
                 verified_suggestions.append(suggestion)
-            # Otherwise: card not in search results — silently drop
 
         result["suggestions"] = verified_suggestions
 
@@ -639,26 +483,27 @@ Violating this rule makes recommendations untrustworthy. When in doubt, do NOT s
             role_by_name = {cr["name"].lower(): cr for cr in role_list}
             deck_card_names = {cr["name"].lower() for cr in role_list}
 
-            # Build critical cards set from strategy profile
             critical_cards = set()
             if deck_info and isinstance(deck_info, dict):
                 profile = deck_info.get("strategy_profile") or {}
                 for card_name in profile.get("critical_cards", []):
                     critical_cards.add(card_name.lower())
 
+                # Also block cards scored 8+ from cuts
+                impact_ratings = profile.get("card_impact_ratings", [])
+                for rating in impact_ratings:
+                    if rating.get("score", 0) >= 8:
+                        critical_cards.add(rating["card_name"].lower())
+
             verified_cuts = []
             for cut in result.get("cuts", []):
                 cut_name = cut.get("card_name", "").lower()
 
-                # Must be in the deck
                 if cut_name not in deck_card_names:
                     continue
-
-                # Must not be a critical card from strategy profile
                 if cut_name in critical_cards:
                     continue
 
-                # Must not be tribal synergy
                 is_protected = False
                 if primary_type and primary_type in cut_name:
                     is_protected = True

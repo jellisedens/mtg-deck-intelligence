@@ -309,6 +309,22 @@ def _build_compact_summary(deck_info: dict, analytics: dict, role_data: dict,
         f"Cards: {analytics.get('total_cards', 0)} | Spells: {identity.get('spell_count', 0)} | Permanents: {identity.get('permanent_count', 0)}",
         f"Lands: {mana_base.get('land_count', 0)} ({mana_base.get('land_percentage', 0)}%) | Sources: {json.dumps(mana_base.get('color_sources', {}))}",
         f"Color pips needed: {json.dumps(color_pips)}",
+    ]
+
+    # Pip-to-source ratio (higher = more strained)
+    color_sources = mana_base.get("color_sources", {})
+    pip_ratios = {}
+    for color in ["W", "U", "B", "R", "G"]:
+        pips = color_pips.get(color, 0)
+        sources = color_sources.get(color, 0)
+        if sources > 0 and pips > 0:
+            pip_ratios[color] = round(pips / sources, 2)
+    if pip_ratios:
+        sorted_ratios = sorted(pip_ratios.items(), key=lambda x: -x[1])
+        ratio_str = ", ".join([f"{c}: {r} ({color_pips.get(c, 0)} pips / {color_sources.get(c, 0)} sources)" for c, r in sorted_ratios])
+        lines.append(f"Color strain (pips/sources, higher=worse): {ratio_str}")
+
+    lines.extend([
         f"Mana curve: {json.dumps(analytics.get('mana_curve', {}))}",
         "",
         "Role status:",
@@ -324,6 +340,6 @@ def _build_compact_summary(deck_info: dict, analytics: dict, role_data: dict,
         f"Weaknesses: {json.dumps(profile.get('weaknesses', []))}",
         f"Needs more: {json.dumps(profile.get('role_needs', {}).get('needs_more', []))}",
         f"Over-saturated: {json.dumps(profile.get('role_needs', {}).get('over_saturated', []))}",
-    ]
+    ])
 
     return "\n".join(lines)

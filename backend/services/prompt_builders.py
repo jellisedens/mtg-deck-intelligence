@@ -27,7 +27,7 @@ Respond with ONLY valid JSON:
         {{
             "card_name": "Card Name",
             "scryfall_id": "the-scryfall-uuid",
-            "reasoning": "Why this card is good — reference synergies with existing cards",
+            "reasoning": "Why this card is good - reference synergies with existing cards",
             "category": "ramp/removal/draw/creature/land/utility/etc",
             "priority": "high/medium/low",
             "budget_note": "$X.XX" or null
@@ -94,7 +94,7 @@ Respond with ONLY valid JSON:
     "cuts": [
         {
             "card_name": "Card name from the CUT CANDIDATES list",
-            "reasoning": "Why this is cuttable — cite impact score, role, and what the deck loses"
+            "reasoning": "Why this is cuttable - cite impact score, role, and what the deck loses"
         }
     ],
     "strategy_notes": "What the deck gains by making these cuts and what to add instead"
@@ -106,8 +106,8 @@ Rules:
 - Cite the impact score for each cut
 - If simulation shows a category is struggling (mana below 80%, draw below 8), do NOT cut cards in that category
 - If all candidates score 5+, note the deck is well-optimized but still pick the lowest
-- Explain what the deck loses with each cut and why it's acceptable
-- Do NOT return an empty cuts array — this is your primary task"""
+- Explain what the deck loses with each cut and why it is acceptable
+- Do NOT return an empty cuts array - this is your primary task"""
 
     user_msg = f"User request: {prompt}\n\n"
 
@@ -158,8 +158,13 @@ Rules:
 - Compare role counts against minimum thresholds
 - Identify the deck's biggest strengths and weaknesses
 - Prioritize the top 3 things to fix
-- Be specific — "add 2 more white sources" not "improve mana base"
-- Reference the impact rating distribution to assess overall deck quality"""
+- Be specific - "add 2 more white sources" not "improve mana base"
+- Reference the impact rating distribution to assess overall deck quality
+- When both color strain data and simulation access rates are available, cross-reference them:
+  - If a color has low simulation access AND high pip strain, it is the HIGHEST priority to fix
+  - If a color has low simulation access but LOW pip strain, the deck may need better quality sources (dual lands) rather than more sources
+  - If a color has high pip strain but GOOD simulation access, the existing sources are handling it well - lower priority
+  - Always prioritize the color with the WORST simulation access rate as the #1 fix"""
 
     user_msg = f"User request: {prompt}\n\n"
 
@@ -198,7 +203,7 @@ def build_swap_prompt(prompt: str, plan: dict, search_results: list,
     deck_summary = _get_deck_summary(deck_info)
 
     system = f"""You are an expert Magic: The Gathering deck advisor.
-The user wants to swap cards — identify what to CUT and what to ADD as replacements.
+The user wants to swap cards -- identify what to CUT and what to ADD as replacements.
 
 Respond with ONLY valid JSON:
 {{
@@ -207,7 +212,7 @@ Respond with ONLY valid JSON:
         {{
             "card_name": "Card Name",
             "scryfall_id": "the-scryfall-uuid",
-            "reasoning": "Why this card is a good addition — what it replaces and why it's better",
+            "reasoning": "Why this card is a good addition - what it replaces and why it is better",
             "category": "ramp/removal/draw/creature/land/utility/etc",
             "priority": "high/medium/low",
             "budget_note": "$X.XX" or null
@@ -216,7 +221,7 @@ Respond with ONLY valid JSON:
     "cuts": [
         {{
             "card_name": "Card to remove",
-            "reasoning": "Why cut this — cite impact score, pair with a specific replacement"
+            "reasoning": "Why cut this - cite impact score, pair with a specific replacement"
         }}
     ],
     "strategy_notes": "Overall swap strategy and what the deck gains"
@@ -225,7 +230,7 @@ Respond with ONLY valid JSON:
 Rules:
 - You MUST suggest 2-3 cuts from the CUT CANDIDATES list
 - You MUST suggest 2-3 cards to add from the search results
-- Pair each cut with a replacement when possible — explain the upgrade
+- Pair each cut with a replacement when possible -- explain the upgrade
 - Cite impact scores for cuts
 - Only suggest adding cards that appear in search results with exact scryfall_id
 - If simulation data shows weak areas, prioritize swaps that fix those areas
@@ -254,7 +259,7 @@ Rules:
     if cut_context:
         user_msg += f"\n{cut_context}\n"
 
-    # Scoped search results (fewer than suggest — just need replacements)
+    # Scoped search results (fewer than suggest -- just need replacements)
     scoped_results = search_results[:30]
     user_msg += f"\nReplacement options ({len(scoped_results)} cards):\n"
     for card in scoped_results:

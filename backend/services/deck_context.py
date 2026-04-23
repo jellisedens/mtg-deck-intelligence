@@ -164,12 +164,18 @@ def build_simulation_context(simulation_data: dict) -> str:
     elif uncastable_t5 > 2:
         lines.append(f"CAUTION: {uncastable_t5} uncastable cards by turn 5 — consider lowering curve or adding fixing.")
 
+    # Sort colors by access rate (worst first) for prioritized fixing
     turn5_access = turn5.get("color_access_rates", {})
-    for color, pct in turn5_access.items():
+    sorted_access = sorted(turn5_access.items(), key=lambda x: x[1])
+    for color, pct in sorted_access:
         if pct < 60:
-            lines.append(f"CRITICAL: {color} access is only {pct}% by turn 5 — deck desperately needs more {color} sources.")
+            lines.append(f"CRITICAL: {color} access is only {pct}% by turn 5 — HIGHEST PRIORITY for fixing.")
         elif pct < 75:
             lines.append(f"WARNING: {color} access is weak at {pct}% by turn 5 — add more {color}-producing lands or rocks.")
+    
+    if sorted_access:
+        worst_color, worst_pct = sorted_access[0]
+        lines.append(f"WORST color access: {worst_color} at {worst_pct}% — fix this color FIRST.")
 
     power_t5 = turn5.get("avg_total_power_on_board", 0)
     creatures_t5 = turn5.get("avg_creatures_on_board", 0)

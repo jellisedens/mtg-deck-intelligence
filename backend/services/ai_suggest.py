@@ -152,8 +152,10 @@ async def _handle_analyze(prompt: str, deck_info: dict, simulation_data: dict) -
     )
 
     result = _call_ai(system, user_msg)
-    result.setdefault("suggestions", [])
-    result.setdefault("cuts", [])
+
+    # Force empty arrays — analysis puts everything in strategy_notes
+    result["suggestions"] = []
+    result["cuts"] = []
     result.setdefault("debug", {})
 
     return result

@@ -58,11 +58,11 @@ async def _get_simulation_data(deck, deck_cards, db) -> dict | None:
                 # No cached tags — skip simulation rather than waiting 3 min
                 return None
 
-        # Run a quick 50-game simulation (fast since tags are cached)
+        # Run a quick 100-game simulation (fast since tags are cached)
         result = run_simulation(
             deck_cards=main_deck,
             sim_tags=sim_tags,
-            n_games=50,
+            n_games=100,
             turns=10,
         )
         return result

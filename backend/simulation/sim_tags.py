@@ -324,3 +324,36 @@ def _fallback_tags(card: dict) -> dict:
     }
 
     return tags
+
+
+def _call_sim_tag_batch(system: str, user_msg: str, batch: list) -> dict:
+    """Execute a single sim tag batch. Thread-safe."""
+    try:
+        response = client.chat.completions.create(
+            model=MODEL,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user_msg},
+            ],
+            temperature=0.1,
+        )
+        content = response.choices[0].message.content.strip()
+        content = content.replace("```json", "").replace("```", "").strip()
+        parsed = json.loads(content)
+
+        tags = {}
+        for card_data in parsed.get("cards", []):
+            name = card_data.get("name", "").lower()
+            card_tags = card_data.get("sim_tags", {})
+            original = next((c for c in batch if c["name"].lower() == name), None)
+            if original:
+                card_tags = _validate_and_fix(card_tags, original)
+            tags[name] = card_tags
+        return tags
+
+    except Exception as e:
+        print(f"Sim tag batch failed: {e}")
+        result = {}
+        for card in batch:
+            result[card["name"].lower()] = _fallback_tags(card)
+        return result

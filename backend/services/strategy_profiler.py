@@ -2,6 +2,9 @@
 AI-powered strategy profile generator.
 Analyzes a deck and generates a structured strategic profile
 that can be stored and referenced for all future AI interactions.
+
+Split into base profile + impact batches to enable parallel execution
+from the strategy route handler.
 """
 
 import os
@@ -12,16 +15,15 @@ client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 MODEL = "gpt-4o-mini"
 
 
-def generate_strategy_profile(deck_info: dict, deck_cards: list,
-                               card_lookup: dict, analytics: dict,
-                               role_data: dict) -> dict:
+def generate_base_profile(deck_info: dict, deck_cards: list,
+                           card_lookup: dict, analytics: dict,
+                           role_data: dict) -> dict:
     """
-    Generate a comprehensive strategy profile for a deck.
-    Returns a structured dict that gets stored in deck.strategy_profile.
+    Generate the base strategy profile (1 AI call).
+    Does NOT include impact ratings or compact summary - those are
+    added by the caller after parallel execution.
     """
-    # Build card summary with oracle text
     card_lines = []
-    card_names_for_rating = []
     for card in deck_cards:
         full_data = card_lookup.get(card.scryfall_id, {})
         oracle = full_data.get("oracle_text", "")[:150]
@@ -31,21 +33,8 @@ def generate_strategy_profile(deck_info: dict, deck_cards: list,
         card_lines.append(
             f"- {card.quantity}x {card.card_name} | {type_line} | {mana_cost} (CMC {cmc}) | {oracle}"
         )
-        if card.board != "commander":
-            card_names_for_rating.append(card.card_name)
 
-    # Get commander info
-    commander_cards = [c for c in deck_cards if c.board == "commander"]
-    commander_text = ""
-    if commander_cards:
-        cmd = commander_cards[0]
-        cmd_data = card_lookup.get(cmd.scryfall_id, {})
-        commander_text = f"""Commander: {cmd.card_name}
-Type: {cmd_data.get('type_line', '')}
-Mana Cost: {cmd_data.get('mana_cost', '')}
-CMC: {cmd_data.get('cmc', 0)}
-Abilities: {cmd_data.get('oracle_text', '')}"""
-
+    commander_text = _get_commander_text(deck_cards, card_lookup)
     primary_type = role_data.get("primary_creature_type", "None")
     role_dist = role_data.get("role_distribution", {})
     identity = analytics.get("deck_identity", {})
@@ -110,46 +99,34 @@ Card list:
 
         content = response.choices[0].message.content.strip()
         content = content.replace("```json", "").replace("```", "").strip()
-        profile = json.loads(content)
-
-        # Generate impact ratings in a separate call
-        impact_ratings = _generate_impact_ratings(
-            deck_info=deck_info,
-            card_names=card_names_for_rating,
-            card_lines=card_lines,
-            commander_text=commander_text,
-            profile=profile,
-            role_data=role_data,
-            analytics=analytics,
-        )
-        if impact_ratings:
-            profile["card_impact_ratings"] = impact_ratings
-        # Generate compact deck summary for fast AI requests
-        profile["deck_summary"] = _build_compact_summary(
-            deck_info=deck_info,
-            analytics=analytics,
-            role_data=role_data,
-            profile=profile,
-            commander_text=commander_text,
-        )
-
-        return profile
+        return json.loads(content)
 
     except Exception as e:
         return {"error": str(e)}
 
 
-def _generate_impact_ratings(deck_info: dict, card_names: list,
-                              card_lines: list, commander_text: str,
-                              profile: dict, role_data: dict,
-                              analytics: dict) -> list:
+def build_impact_batches(deck_info: dict, deck_cards: list, card_lookup: dict,
+                          analytics: dict, role_data: dict, profile: dict) -> list:
     """
-    Generate per-card impact ratings in batches.
-    Splits cards into groups to avoid token limits.
+    Build impact rating batch payloads without executing them.
+    Returns list of (system_prompt, user_msg) tuples ready for parallel execution.
     """
-    all_ratings = []
+    card_names = []
+    card_lines = []
+    for card in deck_cards:
+        full_data = card_lookup.get(card.scryfall_id, {})
+        oracle = full_data.get("oracle_text", "")[:150]
+        type_line = full_data.get("type_line", "")
+        mana_cost = full_data.get("mana_cost", "")
+        cmc = full_data.get("cmc", 0)
+        card_lines.append(
+            f"- {card.quantity}x {card.card_name} | {type_line} | {mana_cost} (CMC {cmc}) | {oracle}"
+        )
+        if card.board != "commander":
+            card_names.append(card.card_name)
 
-    # Build context summary (compact — reused across batches)
+    commander_text = _get_commander_text(deck_cards, card_lookup)
+
     identity = analytics.get("deck_identity", {})
     context = f"""Deck: {deck_info.get('name', 'Unknown')} | Format: {deck_info.get('format', 'Unknown')}
 {commander_text}
@@ -171,43 +148,36 @@ Respond with ONLY a valid JSON array (no markdown, no backticks):
 
 SCORING GUIDE:
 9-10 CORE: Deck's strategy depends on this card. Removing it significantly weakens the game plan.
-     Examples: key tribal payoffs, irreplaceable engines, best-in-class effects.
 7-8  STRONG: High synergy, hard to replace. Does its job exceptionally well in this deck.
-     Examples: draw engines that trigger off the deck's main activity, efficient fixing.
 5-6  SOLID: Competent but replaceable. Works fine but a better option likely exists.
-     Examples: generic removal, redundant ramp without specific synergy.
 3-4  FLEXIBLE: Weaker option in its category. Could be upgraded or swapped.
-     Examples: overcosted effects, generic utility with no commander synergy.
 1-2  CUTTABLE: Lowest impact. Off-theme, redundant with better options, or too expensive.
 
 KEY FACTORS:
 1. SYNERGY with commander and deck strategy (most important)
-2. UNIQUENESS — does anything else in the deck do this?
-3. EFFICIENCY — CMC vs impact
-4. ROLE COVERAGE — is this role over/under-represented?
+2. UNIQUENESS - does anything else in the deck do this?
+3. EFFICIENCY - CMC vs impact
+4. ROLE COVERAGE - is this role over/under-represented?
 
-IMPORTANT: Be honest — a well-built deck has a range. Roughly:
-5-10 cards at 9-10, 15-20 at 7-8, 20-30 at 5-6, 5-15 at 3-4.
-Rate ALL cards provided — do not skip any."""
+IMPORTANT: Be honest. Roughly: 5-10 at 9-10, 15-20 at 7-8, 20-30 at 5-6, 5-15 at 3-4.
+Rate ALL cards provided - do not skip any."""
 
-    # Split into batches of 25
+    role_lookup = {}
+    if role_data:
+        for cr in role_data.get("card_roles", []):
+            role_lookup[cr["name"].lower()] = cr
+
+    batches = []
     batch_size = 25
     for i in range(0, len(card_names), batch_size):
         batch_names = card_names[i:i + batch_size]
 
-        # Get the card lines for this batch
         batch_lines = []
         for name in batch_names:
             for line in card_lines:
                 if name in line:
                     batch_lines.append(line)
                     break
-
-        # Get role info for this batch
-        role_lookup = {}
-        if role_data:
-            for cr in role_data.get("card_roles", []):
-                role_lookup[cr["name"].lower()] = cr
 
         role_lines = []
         for name in batch_names:
@@ -219,7 +189,7 @@ Rate ALL cards provided — do not skip any."""
             if secondary:
                 role_str += f" (also: {', '.join(secondary)})"
             if synergy:
-                role_str += f" — {synergy}"
+                role_str += f" - {synergy}"
             role_lines.append(f"- {name}{role_str}")
 
         user_msg = f"""{context}
@@ -230,38 +200,47 @@ Rate these {len(batch_names)} cards:
 Card roles:
 {chr(10).join(role_lines)}"""
 
-        try:
-            response = client.chat.completions.create(
-                model=MODEL,
-                messages=[
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": user_msg},
-                ],
-                temperature=0.3,
-                max_tokens=3000,
-            )
+        batches.append((system, user_msg))
 
-            content = response.choices[0].message.content.strip()
-            content = content.replace("```json", "").replace("```", "").strip()
-            batch_ratings = json.loads(content)
+    return batches
 
-            if isinstance(batch_ratings, list):
-                all_ratings.extend(batch_ratings)
 
-        except Exception as e:
-            print(f"Impact rating batch {i // batch_size + 1} failed: {e}")
-            continue
+def _call_impact_batch(system: str, user_msg: str) -> list:
+    """Execute a single impact rating batch. Thread-safe."""
+    try:
+        response = client.chat.completions.create(
+            model=MODEL,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user_msg},
+            ],
+            temperature=0.3,
+            max_tokens=3000,
+        )
+        content = response.choices[0].message.content.strip()
+        content = content.replace("```json", "").replace("```", "").strip()
+        batch_ratings = json.loads(content)
+        if isinstance(batch_ratings, list):
+            return batch_ratings
+        return []
+    except Exception as e:
+        print(f"Impact rating batch failed: {e}")
+        return []
 
-    # Deduplicate ratings (keep first occurrence)
-    seen = set()
-    deduped = []
-    for rating in all_ratings:
-        name = rating.get("card_name", "").lower()
-        if name not in seen:
-            seen.add(name)
-            deduped.append(rating)
 
-    return deduped
+def _get_commander_text(deck_cards, card_lookup):
+    """Extract commander text for prompts."""
+    commander_cards = [c for c in deck_cards if c.board == "commander"]
+    if commander_cards:
+        cmd = commander_cards[0]
+        cmd_data = card_lookup.get(cmd.scryfall_id, {})
+        return f"""Commander: {cmd.card_name}
+Type: {cmd_data.get('type_line', '')}
+Mana Cost: {cmd_data.get('mana_cost', '')}
+CMC: {cmd_data.get('cmc', 0)}
+Abilities: {cmd_data.get('oracle_text', '')}"""
+    return ""
+
 
 def _build_compact_summary(deck_info: dict, analytics: dict, role_data: dict,
                             profile: dict, commander_text: str) -> str:
@@ -279,7 +258,7 @@ def _build_compact_summary(deck_info: dict, analytics: dict, role_data: dict,
     thresholds = {"ramp": 10, "card_draw": 8, "removal": 6, "board_wipe": 2, "land": 33}
     for role, minimum in thresholds.items():
         count = role_dist.get(role, 0)
-        status = "✓" if count >= minimum else "✗ BELOW"
+        status = "ok" if count >= minimum else "BELOW"
         role_status.append(f"{role}: {count} (min {minimum}) {status}")
 
     # Impact rating distribution
@@ -343,3 +322,34 @@ def _build_compact_summary(deck_info: dict, analytics: dict, role_data: dict,
     ])
 
     return "\n".join(lines)
+
+
+# Keep backward compatibility alias
+def generate_strategy_profile(deck_info, deck_cards, card_lookup, analytics, role_data):
+    """Backward compatible wrapper - generates full profile with impact ratings."""
+    profile = generate_base_profile(deck_info, deck_cards, card_lookup, analytics, role_data)
+    if "error" in profile:
+        return profile
+
+    # Build and execute impact batches sequentially (non-parallel fallback)
+    batches = build_impact_batches(deck_info, deck_cards, card_lookup, analytics, role_data, profile)
+    all_ratings = []
+    for system_prompt, user_msg in batches:
+        result = _call_impact_batch(system_prompt, user_msg)
+        if result:
+            all_ratings.extend(result)
+
+    seen = set()
+    deduped = []
+    for rating in all_ratings:
+        name = rating.get("card_name", "").lower()
+        if name not in seen:
+            seen.add(name)
+            deduped.append(rating)
+
+    profile["card_impact_ratings"] = deduped
+
+    commander_text = _get_commander_text(deck_cards, card_lookup)
+    profile["deck_summary"] = _build_compact_summary(deck_info, analytics, role_data, profile, commander_text)
+
+    return profile

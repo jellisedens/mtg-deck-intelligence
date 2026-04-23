@@ -6,6 +6,7 @@ Each builder creates a focused, compact prompt optimized for its task.
 import json
 from services.deck_context import build_simulation_context
 from services.cut_analyzer import build_cut_context
+from services.mana_analyzer import format_color_health_for_prompt
 
 
 def build_suggest_prompt(prompt: str, plan: dict, search_results: list,
@@ -46,6 +47,7 @@ Rules:
 - If deck is spell-heavy, prefer instant/sorcery-based options
 - If average CMC > 3.5, prefer lower-cost suggestions
 - If simulation data shows weak colors, prioritize fixing for those colors
+- If Mana Health scores are provided, use FIX FIRST colors to prioritize suggestions
 - Cite specific numbers from the deck summary in your reasoning
 
 {synergy_rules}
@@ -61,6 +63,11 @@ Rules:
         sim_context = build_simulation_context(simulation_data)
         if sim_context:
             user_msg += f"{sim_context}\n"
+
+    # Add cached color health scores
+    color_health_str = _get_cached_color_health(deck_info)
+    if color_health_str:
+        user_msg += f"\n{color_health_str}\n"
 
     user_msg += f"Search results ({len(search_results)} cards):\n"
     for card in search_results:
@@ -105,6 +112,7 @@ Rules:
 - Pick the LOWEST scoring cards first
 - Cite the impact score for each cut
 - If simulation shows a category is struggling (mana below 80%, draw below 8), do NOT cut cards in that category
+- If Mana Health shows CRITICAL colors, do NOT cut cards that produce those colors
 - If all candidates score 5+, note the deck is well-optimized but still pick the lowest
 - Explain what the deck loses with each cut and why it is acceptable
 - Do NOT return an empty cuts array - this is your primary task"""
@@ -118,6 +126,11 @@ Rules:
         sim_context = build_simulation_context(simulation_data)
         if sim_context:
             user_msg += f"{sim_context}\n"
+
+    # Add cached color health scores
+    color_health_str = _get_cached_color_health(deck_info)
+    if color_health_str:
+        user_msg += f"\n{color_health_str}\n"
 
     # Add cut candidates
     cut_context = build_cut_context(
@@ -160,11 +173,10 @@ Rules:
 - Prioritize the top 3 things to fix
 - Be specific - "add 2 more white sources" not "improve mana base"
 - Reference the impact rating distribution to assess overall deck quality
-- When both color strain data and simulation access rates are available, cross-reference them:
-  - If a color has low simulation access AND high pip strain, it is the HIGHEST priority to fix
-  - If a color has low simulation access but LOW pip strain, the deck may need better quality sources (dual lands) rather than more sources
-  - If a color has high pip strain but GOOD simulation access, the existing sources are handling it well - lower priority
-  - Always prioritize the color with the WORST simulation access rate as the #1 fix"""
+- When Mana Health scores are provided, use them as the authoritative source for color fixing priorities
+- The color with the LOWEST Mana Health score is the #1 fix priority
+- Colors marked CRITICAL (below 65) need immediate attention
+- Always reference the Mana Health FIX FIRST recommendation in your top priorities"""
 
     user_msg = f"User request: {prompt}\n\n"
 
@@ -175,6 +187,11 @@ Rules:
         sim_context = build_simulation_context(simulation_data)
         if sim_context:
             user_msg += f"{sim_context}\n"
+
+    # Add cached color health scores
+    color_health_str = _get_cached_color_health(deck_info)
+    if color_health_str:
+        user_msg += f"\n{color_health_str}\n"
 
     # Add impact distribution if available
     profile = (deck_info or {}).get("strategy_profile") or {}
@@ -234,6 +251,7 @@ Rules:
 - Cite impact scores for cuts
 - Only suggest adding cards that appear in search results with exact scryfall_id
 - If simulation data shows weak areas, prioritize swaps that fix those areas
+- If Mana Health shows CRITICAL colors, prioritize replacements that produce those colors
 
 {synergy_rules}
 {strategic_context}"""
@@ -248,6 +266,11 @@ Rules:
         sim_context = build_simulation_context(simulation_data)
         if sim_context:
             user_msg += f"{sim_context}\n"
+
+    # Add cached color health scores
+    color_health_str = _get_cached_color_health(deck_info)
+    if color_health_str:
+        user_msg += f"\n{color_health_str}\n"
 
     # Cut candidates
     cut_context = build_cut_context(
@@ -279,3 +302,14 @@ def _get_deck_summary(deck_info: dict) -> str:
         return ""
     profile = deck_info.get("strategy_profile") or {}
     return profile.get("deck_summary", "")
+
+
+def _get_cached_color_health(deck_info: dict) -> str:
+    """Get pre-computed color health from the strategy profile."""
+    if not deck_info:
+        return ""
+    profile = deck_info.get("strategy_profile") or {}
+    health_data = profile.get("color_health")
+    if health_data:
+        return format_color_health_for_prompt(health_data)
+    return ""

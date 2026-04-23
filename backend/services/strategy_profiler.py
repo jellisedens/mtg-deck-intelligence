@@ -124,6 +124,14 @@ Card list:
         )
         if impact_ratings:
             profile["card_impact_ratings"] = impact_ratings
+        # Generate compact deck summary for fast AI requests
+        profile["deck_summary"] = _build_compact_summary(
+            deck_info=deck_info,
+            analytics=analytics,
+            role_data=role_data,
+            profile=profile,
+            commander_text=commander_text,
+        )
 
         return profile
 
@@ -254,3 +262,68 @@ Card roles:
             deduped.append(rating)
 
     return deduped
+
+def _build_compact_summary(deck_info: dict, analytics: dict, role_data: dict,
+                            profile: dict, commander_text: str) -> str:
+    """
+    Build a compact (~300 token) deck summary for use in AI prompts.
+    Pre-cached in the strategy profile so it doesn't need to be rebuilt.
+    """
+    identity = analytics.get("deck_identity", {})
+    role_dist = role_data.get("role_distribution", {})
+    mana_base = analytics.get("mana_base", {})
+    primary_type = role_data.get("primary_creature_type", "None")
+
+    # Role threshold checks
+    role_status = []
+    thresholds = {"ramp": 10, "card_draw": 8, "removal": 6, "board_wipe": 2, "land": 33}
+    for role, minimum in thresholds.items():
+        count = role_dist.get(role, 0)
+        status = "✓" if count >= minimum else "✗ BELOW"
+        role_status.append(f"{role}: {count} (min {minimum}) {status}")
+
+    # Impact rating distribution
+    impact_ratings = profile.get("card_impact_ratings", [])
+    impact_dist = ""
+    if impact_ratings:
+        scores = [r.get("score", 5) for r in impact_ratings]
+        core = len([s for s in scores if s >= 9])
+        strong = len([s for s in scores if 7 <= s <= 8])
+        solid = len([s for s in scores if 5 <= s <= 6])
+        flexible = len([s for s in scores if 3 <= s <= 4])
+        cuttable = len([s for s in scores if s <= 2])
+        avg = round(sum(scores) / len(scores), 1)
+        impact_dist = f"Impact: avg {avg} | core(9-10): {core} | strong(7-8): {strong} | solid(5-6): {solid} | flexible(3-4): {flexible} | cuttable(1-2): {cuttable}"
+
+    # Color distribution summary
+    colors = analytics.get("color_distribution", {})
+    color_pips = {c: info["count"] for c, info in colors.items() if info.get("count", 0) > 0}
+
+    # Build summary
+    lines = [
+        f"Deck: {deck_info.get('name', 'Unknown')} | {deck_info.get('format', 'Unknown')}",
+        f"Commander: {commander_text.split(chr(10))[0] if commander_text else 'Unknown'}",
+        f"Strategy: {profile.get('primary_strategy', 'Unknown')}",
+        f"Identity: {identity.get('recommendation_weight', 'balanced')} | Avg CMC: {analytics.get('average_cmc', 0)}",
+        f"Creature type: {primary_type}",
+        f"Cards: {analytics.get('total_cards', 0)} | Spells: {identity.get('spell_count', 0)} | Permanents: {identity.get('permanent_count', 0)}",
+        f"Lands: {mana_base.get('land_count', 0)} ({mana_base.get('land_percentage', 0)}%) | Sources: {json.dumps(mana_base.get('color_sources', {}))}",
+        f"Color pips needed: {json.dumps(color_pips)}",
+        f"Mana curve: {json.dumps(analytics.get('mana_curve', {}))}",
+        "",
+        "Role status:",
+        *[f"  {s}" for s in role_status],
+        f"  tribal_synergy: {role_dist.get('tribal_synergy', 0)}",
+        f"  utility: {role_dist.get('utility', 0)}",
+        f"  cost_reducer: {role_dist.get('cost_reducer', 0)}",
+        f"  tutor: {role_dist.get('tutor', 0)}",
+        "",
+        impact_dist,
+        "",
+        f"Win conditions: {json.dumps(profile.get('win_conditions', []))}",
+        f"Weaknesses: {json.dumps(profile.get('weaknesses', []))}",
+        f"Needs more: {json.dumps(profile.get('role_needs', {}).get('needs_more', []))}",
+        f"Over-saturated: {json.dumps(profile.get('role_needs', {}).get('over_saturated', []))}",
+    ]
+
+    return "\n".join(lines)

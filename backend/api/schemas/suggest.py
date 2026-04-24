@@ -24,6 +24,7 @@ class CardSuggestion(BaseModel):
 class CutSuggestion(BaseModel):
     card_name: str
     reasoning: str
+    impact_score: Optional[int] = None
 
 
 class ClarificationOption(BaseModel):

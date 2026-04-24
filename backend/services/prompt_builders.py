@@ -142,7 +142,10 @@ Rules:
     if cut_context:
         user_msg += f"\n{cut_context}"
 
-    user_msg += "\n\nYou MUST pick 2-3 cards from the CUT CANDIDATES list. Do NOT return empty cuts."
+    if not cut_context or "No card impact ratings" in cut_context:
+        user_msg += "\n\nNo impact ratings available. Suggest 2-3 cuts based on the deck summary, prioritizing cards with lowest synergy to the deck's strategy."
+    else:
+        user_msg += "\n\nYou MUST pick 2-3 cards from the CUT CANDIDATES list. Do NOT return empty cuts."
 
     return system, user_msg
 

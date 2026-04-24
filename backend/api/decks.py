@@ -20,7 +20,7 @@ from api.schemas.deck import (
 router = APIRouter(prefix="/decks", tags=["decks"])
 
 
-# ─── Helper ────────────────────────────────────────────
+# ─── Helpers ───────────────────────────────────────────
 
 def _get_user_deck(deck_id: UUID, user: User, db: Session) -> Deck:
     """Fetch a deck and verify it belongs to the current user."""
@@ -32,6 +32,22 @@ def _get_user_deck(deck_id: UUID, user: User, db: Session) -> Deck:
         raise HTTPException(status_code=403, detail="Not your deck")
 
     return deck
+
+
+def _invalidate_strategy_cache(deck: Deck):
+    """Clear all cached strategy data when deck composition changes.
+    Clears sim_tags, impact ratings, simulation, color health, summary -- everything.
+    User must regenerate the strategy profile after making changes."""
+    if deck.strategy_profile:
+        deck.strategy_profile = None
+
+
+# Basic lands exempt from singleton rule
+BASIC_LANDS = {
+    "plains", "island", "swamp", "mountain", "forest",
+    "wastes", "snow-covered plains", "snow-covered island",
+    "snow-covered swamp", "snow-covered mountain", "snow-covered forest",
+}
 
 
 # ─── Deck CRUD ─────────────────────────────────────────
@@ -120,10 +136,57 @@ def add_card(
 ):
     """
     Add a card to the deck.
+    Enforces format rules:
+    - Commander: singleton (max 1 copy except basic lands), max 100 cards, max 1 commander
     If the same card (same scryfall_id + board) already exists,
     the quantity is increased instead of creating a duplicate.
     """
     deck = _get_user_deck(deck_id, user, db)
+
+    # Format validation for Commander
+    if deck.format == "commander":
+        current_cards = db.query(DeckCard).filter(DeckCard.deck_id == deck.id).all()
+        total_count = sum(c.quantity for c in current_cards)
+
+        # Max 100 cards (including commander)
+        if total_count + request.quantity > 100:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Commander decks must have exactly 100 cards. Currently at {total_count}, cannot add {request.quantity} more.",
+            )
+
+        # Singleton rule (except basic lands)
+        if request.card_name.lower() not in BASIC_LANDS:
+            existing_any_board = db.query(DeckCard).filter(
+                DeckCard.deck_id == deck.id,
+                DeckCard.card_name == request.card_name,
+            ).first()
+
+            if existing_any_board:
+                current_qty = existing_any_board.quantity
+                if request.board == existing_any_board.board:
+                    if current_qty + request.quantity > 1:
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"Commander is singleton format. {request.card_name} is already in the deck.",
+                        )
+                else:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Commander is singleton format. {request.card_name} is already in the deck on the {existing_any_board.board} board.",
+                    )
+
+            # Only 1 commander allowed (unless partner)
+            if request.board == "commander":
+                existing_commanders = db.query(DeckCard).filter(
+                    DeckCard.deck_id == deck.id,
+                    DeckCard.board == "commander",
+                ).count()
+                if existing_commanders >= 1:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="This deck already has a commander. Remove the current commander first.",
+                    )
 
     # Check if card already in deck on the same board
     existing = db.query(DeckCard).filter(
@@ -134,11 +197,7 @@ def add_card(
 
     if existing:
         existing.quantity += request.quantity
-        if deck.strategy_profile and "sim_tags" in (deck.strategy_profile or {}):
-            profile = dict(deck.strategy_profile)
-            profile.pop("sim_tags", None)
-            profile.pop("role_data", None)
-            deck.strategy_profile = profile
+        _invalidate_strategy_cache(deck)
         db.commit()
         db.refresh(existing)
         return existing
@@ -151,12 +210,7 @@ def add_card(
         board=request.board,
     )
     db.add(card)
-    # Invalidate cached sim tags and role data since deck changed
-    if deck.strategy_profile and "sim_tags" in (deck.strategy_profile or {}):
-        profile = dict(deck.strategy_profile)
-        profile.pop("sim_tags", None)
-        profile.pop("role_data", None)
-        deck.strategy_profile = profile
+    _invalidate_strategy_cache(deck)
     db.commit()
     db.refresh(card)
     return card
@@ -184,6 +238,7 @@ def update_card(
     if request.quantity is not None:
         if request.quantity <= 0:
             db.delete(card)
+            _invalidate_strategy_cache(deck)
             db.commit()
             raise HTTPException(
                 status_code=status.HTTP_200_OK,
@@ -194,11 +249,7 @@ def update_card(
     if request.board is not None:
         card.board = request.board
 
-    if deck.strategy_profile and "sim_tags" in (deck.strategy_profile or {}):
-        profile = dict(deck.strategy_profile)
-        profile.pop("sim_tags", None)
-        profile.pop("role_data", None)
-        deck.strategy_profile = profile
+    _invalidate_strategy_cache(deck)
     db.commit()
     db.refresh(card)
     return card
@@ -223,9 +274,5 @@ def remove_card(
         raise HTTPException(status_code=404, detail="Card not found in this deck")
 
     db.delete(card)
-    if deck.strategy_profile and "sim_tags" in (deck.strategy_profile or {}):
-        profile = dict(deck.strategy_profile)
-        profile.pop("sim_tags", None)
-        profile.pop("role_data", None)
-        deck.strategy_profile = profile
+    _invalidate_strategy_cache(deck)
     db.commit()

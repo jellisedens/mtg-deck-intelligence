@@ -160,6 +160,127 @@ RULES:
 
     return all_tags
 
+def build_sim_tag_batches(deck_cards: list, card_lookup: dict) -> list:
+    """
+    Build sim tag batch payloads without executing them.
+    Returns list of (system_prompt, user_msg, batch_cards) tuples
+    ready for parallel execution via _call_sim_tag_batch.
+    """
+    card_summaries = []
+    for deck_card in deck_cards:
+        full_data = card_lookup.get(deck_card.scryfall_id, {})
+        card_summaries.append({
+            "name": deck_card.card_name,
+            "mana_cost": full_data.get("mana_cost", ""),
+            "cmc": full_data.get("cmc", 0),
+            "type_line": full_data.get("type_line", ""),
+            "oracle_text": full_data.get("oracle_text", ""),
+            "colors": full_data.get("colors", []),
+            "color_identity": full_data.get("color_identity", []),
+            "power": full_data.get("power"),
+            "toughness": full_data.get("toughness"),
+            "keywords": full_data.get("keywords", []),
+            "produced_mana": full_data.get("produced_mana", []),
+        })
+
+    json_format = """
+Respond with ONLY valid JSON (no markdown, no backticks). Use this structure:
+{
+    "cards": [
+        {
+            "name": "Card Name",
+            "sim_tags": {
+                "cast_cost": {"total": 3, "colors": {"G": 1}} or null for lands,
+                "is_land": false,
+                "permanent": true,
+                "enters_tapped": false,
+                "mana_production": null or {
+                    "type": "tap",
+                    "produces": {"R": 1} or null,
+                    "produces_choice": ["R", "G"] or null,
+                    "produces_any": false,
+                    "amount": 1
+                },
+                "on_resolve": [],
+                "on_etb": [],
+                "on_attack": [],
+                "power": 5 or null,
+                "toughness": 5 or null,
+                "static_effects": []
+            }
+        }
+    ]
+}
+
+AVAILABLE ACTIONS for on_resolve, on_etb, on_attack:
+- {"action": "draw", "count": N}
+- {"action": "put_back", "count": N, "destination": "top_of_library"}
+- {"action": "search_land", "count": N, "destination": "battlefield" or "hand", "enters_tapped": true/false, "land_type": "basic" or "forest" or "any"}
+- {"action": "shuffle_library"}
+- {"action": "create_token", "count": N, "token": {"type": "Treasure"} or {"type": "Creature", "power": N, "toughness": N}}
+- {"action": "add_mana", "mana": {"R": 1, "G": 1}}
+- {"action": "destroy", "target": "creature" or "all_non_type"}
+- {"action": "exile", "target": "creature" or "any"}
+- {"action": "scry", "count": N}
+- {"action": "deal_damage", "amount": N, "target": "any"}
+
+AVAILABLE STATIC EFFECTS:
+- {"effect": "cost_reduction", "applies_to": "dragon" or "creature" or "all", "amount": 1}
+- {"effect": "haste", "applies_to": "dragon" or "creature"}
+- {"effect": "draw_on_creature_etb", "condition": "power_3_or_greater" or "power_4_or_greater" or "any"}
+- {"effect": "draw_on_combat_damage"}
+- {"effect": "damage_on_creature_etb", "damage_source": "entering_creature_power"}
+- {"effect": "token_on_dragon_etb", "token": {"type": "Creature", "power": 5, "toughness": 5}}
+- {"effect": "lands_produce_any_color"}
+- {"effect": "additional_land_drop", "count": 1}
+- {"effect": "mana_doubling"}
+"""
+
+    rules = """
+RULES:
+- cast_cost is null for lands
+- is_land is true only for Land type cards
+- permanent is true for creatures, enchantments, artifacts, planeswalkers, AND lands
+- permanent is false for instants and sorceries
+- For dual lands that produce ONE color at a time: use produces_choice, NOT produces
+- For shock lands: enters_tapped is FALSE (assume pay 2 life)
+- For check lands (need 2 basics): enters_tapped is TRUE
+- For basic lands: produces the matching color
+- Eminence abilities work from command zone - always include as static_effect
+- power/toughness: include for creatures, null for non-creatures
+- ALWAYS reference the pattern knowledge base above before generating tags
+"""
+
+    system = (
+        "You are a Magic: The Gathering rules engine. For each card, generate structured "
+        "simulation tags that describe its mechanical effects in a format a game simulator can execute.\n\n"
+        "REFERENCE THESE PATTERNS - they are authoritative and override your general knowledge:\n\n"
+        + SIM_TAG_PATTERNS + "\n\n"
+        + json_format + "\n\n"
+        + rules
+    )
+
+    batches = []
+    batch_size = 25
+    for i in range(0, len(card_summaries), batch_size):
+        batch = card_summaries[i:i + batch_size]
+
+        user_msg = "Generate simulation tags for these cards:\n\n"
+        for card in batch:
+            user_msg += f"Name: {card['name']}\n"
+            user_msg += f"Mana Cost: {card['mana_cost']}\n"
+            user_msg += f"CMC: {card['cmc']}\n"
+            user_msg += f"Type: {card['type_line']}\n"
+            user_msg += f"Oracle: {card['oracle_text']}\n"
+            user_msg += f"Power/Toughness: {card['power']}/{card['toughness']}\n"
+            user_msg += f"Keywords: {card['keywords']}\n"
+            user_msg += f"Produced Mana: {card['produced_mana']}\n"
+            user_msg += f"Color Identity: {card['color_identity']}\n\n"
+
+        batches.append((system, user_msg, batch))
+
+    return batches
+
 
 def _validate_and_fix(tags: dict, card: dict) -> dict:
     """

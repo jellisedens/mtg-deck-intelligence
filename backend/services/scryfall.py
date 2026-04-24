@@ -1,7 +1,9 @@
 import httpx
 import asyncio
+import json
 from datetime import datetime, timedelta
 from typing import Optional
+
 
 
 class ScryfallCache:
@@ -80,16 +82,21 @@ class ScryfallService:
                 return {"error": "api_error", "details": f"Scryfall returned status {response.status_code}"}
 
     async def _post(self, endpoint: str, json_data: dict) -> dict:
-        """Make a POST request to Scryfall with rate limiting and error handling."""
+        """Make a POST request to Scryfall with rate limiting, caching, and error handling."""
+        # Cache key for POST requests
+        cache_key = f"POST:{endpoint}:{json.dumps(json_data, sort_keys=True)}"
+        cached = self._cache.get(cache_key)
+        if cached:
+            return cached
+
         await self._rate_limit()
-
         url = f"{self.BASE_URL}{endpoint}"
-
         async with httpx.AsyncClient(headers=self.HEADERS) as client:
-            response = await client.post(url, json=json_data, timeout=10.0)
-
+            response = await client.post(url, json=json_data, timeout=30.0)
             if response.status_code == 200:
-                return response.json()
+                data = response.json()
+                self._cache.set(cache_key, data)
+                return data
             else:
                 return {"error": "api_error", "details": f"Scryfall returned status {response.status_code}"}
 

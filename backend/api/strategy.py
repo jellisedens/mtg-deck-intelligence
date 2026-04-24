@@ -20,12 +20,12 @@ from services.strategy_profiler import (
     _get_commander_text,
 )
 from services.mana_analyzer import compute_color_health
-from simulation.sim_tags import generate_sim_tags
+from simulation.sim_tags import build_sim_tag_batches, _call_sim_tag_batch
 from simulation.game_engine import run_simulation
 
 router = APIRouter(prefix="/decks", tags=["strategy"])
 
-_executor = ThreadPoolExecutor(max_workers=10)
+_executor = ThreadPoolExecutor(max_workers=12)
 
 
 @router.post("/{deck_id}/strategy", response_model=dict)
@@ -45,63 +45,78 @@ async def generate_deck_strategy(
         raise HTTPException(status_code=400, detail="Deck has no cards")
 
     total_start = time.time()
+    loop = asyncio.get_event_loop()
 
-    # Step 1: Analytics + roles (no AI)
+    # Step 1: Analytics only - Scryfall fetch (fast, ~2s)
     t = time.time()
     analytics = await compute_analytics(cards, include_card_data=True)
     card_lookup = analytics.pop("_card_lookup", {})
     deck_info = {"name": deck.name, "format": deck.format, "description": deck.description}
-    role_data = classify_deck_roles(cards, card_lookup, deck_info)
-    print(f"TIMING: analytics + roles = {time.time() - t:.1f}s")
+    print(f"TIMING: analytics (Scryfall) = {time.time() - t:.1f}s")
 
-    # Step 2: Base profile (1 AI call)
+    # Step 2: PARALLEL PHASE 1 - role classification + base profile + sim tag batches
+    # These are independent of each other
     t = time.time()
-    loop = asyncio.get_event_loop()
-    profile = await loop.run_in_executor(
+
+    role_future = loop.run_in_executor(
+        _executor,
+        lambda: classify_deck_roles(cards, card_lookup, deck_info)
+    )
+
+    profile_future = loop.run_in_executor(
         _executor,
         lambda: generate_base_profile(
             deck_info=deck_info, deck_cards=cards, card_lookup=card_lookup,
-            analytics=analytics, role_data=role_data,
+            analytics=analytics, role_data={"primary_creature_type": "None", "role_distribution": {}, "card_roles": []},
         )
     )
-    print(f"TIMING: base profile = {time.time() - t:.1f}s")
+
+    # Prep sim tag batches (no AI, instant)
+    sim_tag_batches = build_sim_tag_batches(cards, card_lookup)
+
+    # Launch sim tag batches immediately - they don't depend on profile or roles
+    sim_tag_futures = []
+    for system_prompt, user_msg, batch in sim_tag_batches:
+        future = loop.run_in_executor(
+            _executor,
+            lambda s=system_prompt, u=user_msg, b=batch: _call_sim_tag_batch(s, u, b)
+        )
+        sim_tag_futures.append(future)
+
+    # Wait for roles + profile (needed before impact batches)
+    role_data, profile = await asyncio.gather(role_future, profile_future)
+    print(f"TIMING: phase 1 (roles + profile + sim tags started) = {time.time() - t:.1f}s")
 
     if "error" in profile:
         raise HTTPException(status_code=502, detail=f"Strategy generation failed: {profile['error']}")
 
-    # Step 3: Prep impact batches (no AI)
+    # Step 3: PARALLEL PHASE 2 - impact batches (need profile) + wait for sim tags
+    t = time.time()
     impact_batches = build_impact_batches(
         deck_info=deck_info, deck_cards=cards, card_lookup=card_lookup,
         analytics=analytics, role_data=role_data, profile=profile,
     )
-    print(f"TIMING: {len(impact_batches)} impact batches prepared")
+    print(f"TIMING: {len(impact_batches)} impact + {len(sim_tag_batches)} sim tag batches")
 
-    # Step 4: PARALLEL - impact batches + sim tags
-    t = time.time()
-    all_futures = []
-
+    # Launch impact batches
+    impact_futures = []
     for system_prompt, user_msg in impact_batches:
         future = loop.run_in_executor(
             _executor,
             lambda s=system_prompt, u=user_msg: _call_impact_batch(s, u)
         )
-        all_futures.append(future)
+        impact_futures.append(future)
 
-    sim_tags_future = loop.run_in_executor(
-        _executor,
-        lambda: generate_sim_tags(cards, card_lookup)
-    )
-    all_futures.append(sim_tags_future)
+    # Wait for ALL remaining tasks (impact batches + sim tag batches still running)
+    all_remaining = impact_futures + sim_tag_futures
+    completed = await asyncio.gather(*all_remaining, return_exceptions=True)
+    print(f"TIMING: phase 2 (impact + sim tags) = {time.time() - t:.1f}s")
 
-    # Wait for ALL to complete
-    all_results = await asyncio.gather(*all_futures)
-    print(f"TIMING: parallel section ({len(all_futures)} tasks) = {time.time() - t:.1f}s")
+    # Split results
+    impact_results = completed[:len(impact_futures)]
+    sim_tag_results = completed[len(impact_futures):]
 
-    # Split results - impact batches are first, sim tags is last
-    impact_results = all_results[:-1]
-    sim_tags = all_results[-1]
-
-    # Merge and deduplicate impact ratings
+    # Merge impact ratings
     all_ratings = []
     for batch_result in impact_results:
         if batch_result and isinstance(batch_result, list):
@@ -114,18 +129,23 @@ async def generate_deck_strategy(
         if name not in seen:
             seen.add(name)
             deduped.append(rating)
-
     profile["card_impact_ratings"] = deduped
+
+    # Merge sim tags
+    sim_tags = {}
+    for batch_result in sim_tag_results:
+        if batch_result and isinstance(batch_result, dict):
+            sim_tags.update(batch_result)
     profile["sim_tags"] = sim_tags
 
-    # Step 5: Compact summary
+    # Step 4: Compact summary (instant)
     commander_text = _get_commander_text(cards, card_lookup)
     profile["deck_summary"] = _build_compact_summary(
         deck_info=deck_info, analytics=analytics, role_data=role_data,
         profile=profile, commander_text=commander_text,
     )
 
-    # Step 6: Simulation + color health
+    # Step 5: Simulation + color health (fast, ~1-3s)
     t = time.time()
     main_deck_cards = []
     for card in cards:

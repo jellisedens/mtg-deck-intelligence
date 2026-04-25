@@ -9,6 +9,16 @@ from collections import defaultdict
 from copy import deepcopy
 
 
+def _safe_int(value, default=1):
+    """Safely convert a value to int, handling strings and None."""
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except (ValueError, TypeError):
+        return default
+
+
 class GameState:
     """Tracks the state of a single simulated game."""
 
@@ -38,14 +48,14 @@ class GameState:
             if not prod:
                 continue
             if prod.get("produces_any"):
-                mana["any"] += prod.get("amount", 1)
+                mana["any"] += _safe_int(prod.get("amount", 1))
             elif prod.get("produces_choice"):
                 for color in prod["produces_choice"]:
                     mana[f"choice_{color}"] += 1
                 mana["flexible"] += 1
             elif prod.get("produces"):
                 for color, amount in prod["produces"].items():
-                    mana[color] += amount
+                    mana[color] += _safe_int(amount)
 
         for perm in self.battlefield_permanents:
             tags = perm.get("sim_tags", {})
@@ -53,14 +63,14 @@ class GameState:
             if not prod:
                 continue
             if prod.get("produces_any"):
-                mana["any"] += prod.get("amount", 1)
+                mana["any"] += _safe_int(prod.get("amount", 1))
             elif prod.get("produces_choice"):
                 for color in prod["produces_choice"]:
                     mana[f"choice_{color}"] += 1
                 mana["flexible"] += 1
             elif prod.get("produces"):
                 for color, amount in prod["produces"].items():
-                    mana[color] += amount
+                    mana[color] += _safe_int(amount)
 
         return dict(mana)
 
@@ -119,7 +129,7 @@ class GameState:
         if not cost:
             return False
 
-        total_needed = cost.get("total", 0)
+        total_needed = _safe_int(cost.get("total", 0), 0)
         colors_needed = cost.get("colors", {})
 
         # Apply cost reductions
@@ -128,9 +138,9 @@ class GameState:
             applies = red.get("applies_to", "all")
             card_type = card.get("type_line", "").lower()
             if applies == "all":
-                reduction += red.get("amount", 0)
+                reduction += _safe_int(red.get("amount", 0), 0)
             elif applies in card_type:
-                reduction += red.get("amount", 0)
+                reduction += _safe_int(red.get("amount", 0), 0)
 
         total_needed = max(0, total_needed - reduction)
 
@@ -147,6 +157,7 @@ class GameState:
         sources = self.color_sources()
 
         for color, needed in colors_needed.items():
+            needed = _safe_int(needed)
             # Count dedicated sources for this color
             dedicated = sources.get(color, 0)
             if dedicated >= needed:
@@ -176,8 +187,8 @@ class GameState:
         for perm in self.battlefield_permanents:
             tags = perm.get("sim_tags", {})
             power = tags.get("power")
-            if power and isinstance(power, (int, float)):
-                total += int(power)
+            if power is not None:
+                total += _safe_int(power, 0)
         return total
 
 
@@ -187,7 +198,7 @@ def simulate_game(deck_cards: list, sim_tags: dict, turns: int = 10) -> dict:
 
     Args:
         deck_cards: list of card dicts with card_data and quantity
-        sim_tags: dict of card_name (lowercase) → sim_tags
+        sim_tags: dict of card_name (lowercase) -> sim_tags
         turns: number of turns to simulate
 
     Returns:
@@ -234,7 +245,7 @@ def simulate_game(deck_cards: list, sim_tags: dict, turns: int = 10) -> dict:
         state.max_land_drops = 1
         for effect in state.static_effects:
             if effect.get("effect") == "additional_land_drop":
-                state.max_land_drops += effect.get("count", 1)
+                state.max_land_drops += _safe_int(effect.get("count", 1))
 
         # DRAW (skip turn 1)
         if turn_num > 1 and state.library:
@@ -405,17 +416,17 @@ def _prioritize_hand(state: GameState) -> list:
 
 
 def _execute_action(state: GameState, action: dict):
-    """Execute a simulation action."""
+    """Execute a simulation action with safe type coercion."""
     act = action.get("action")
 
     if act == "draw":
-        count = action.get("count", 1)
+        count = _safe_int(action.get("count", 1))
         for _ in range(count):
             if state.library:
                 state.hand.append(state.library.pop(0))
 
     elif act == "put_back":
-        count = action.get("count", 1)
+        count = _safe_int(action.get("count", 1))
         dest = action.get("destination", "top_of_library")
         for _ in range(min(count, len(state.hand))):
             if state.hand:
@@ -426,7 +437,7 @@ def _execute_action(state: GameState, action: dict):
                     state.library.append(card)
 
     elif act == "search_land":
-        count = action.get("count", 1)
+        count = _safe_int(action.get("count", 1))
         dest = action.get("destination", "battlefield")
         land_type = action.get("land_type", "basic")
         enters_tapped = action.get("enters_tapped", False)
@@ -454,13 +465,13 @@ def _execute_action(state: GameState, action: dict):
         random.shuffle(state.library)
 
     elif act == "create_token":
-        count = action.get("count", 1)
+        count = _safe_int(action.get("count", 1))
         token = action.get("token", {})
         for _ in range(count):
             if token.get("type") == "Treasure":
                 state.battlefield_permanents.append({
                     "name": "Treasure Token",
-                    "type_line": "Artifact — Treasure",
+                    "type_line": "Artifact - Treasure",
                     "sim_tags": {
                         "permanent": True,
                         "mana_production": {"produces_any": True, "amount": 1, "type": "sacrifice"},
@@ -468,23 +479,35 @@ def _execute_action(state: GameState, action: dict):
                 })
             elif token.get("type") == "Creature":
                 state.battlefield_permanents.append({
-                    "name": f"{token.get('power', 1)}/{token.get('toughness', 1)} Token",
+                    "name": f"{_safe_int(token.get('power', 1))}/{_safe_int(token.get('toughness', 1))} Token",
                     "type_line": "Creature Token",
                     "sim_tags": {
                         "permanent": True,
-                        "power": token.get("power", 1),
-                        "toughness": token.get("toughness", 1),
+                        "power": _safe_int(token.get("power", 1)),
+                        "toughness": _safe_int(token.get("toughness", 1)),
                     },
                 })
 
     elif act == "scry":
-        count = action.get("count", 1)
+        count = _safe_int(action.get("count", 1))
         for _ in range(min(count, len(state.library))):
             card = state.library[0]
             lands_on_board = len(state.battlefield_lands)
             if card.get("sim_tags", {}).get("is_land") and lands_on_board >= 4:
                 state.library.pop(0)
                 state.library.append(card)
+
+    elif act == "deal_damage":
+        # Tracked but no opponent in goldfish
+        pass
+
+    elif act == "add_mana":
+        # Tracked but mana pool management is simplified
+        pass
+
+    elif act == "destroy" or act == "exile":
+        # No opponent permanents in goldfish
+        pass
 
 
 def run_simulation(deck_cards: list, sim_tags: dict,
@@ -556,7 +579,7 @@ def run_simulation(deck_cards: list, sim_tags: dict,
             color_access[color] = round(has_color / n * 100, 1)
         averaged["color_access_rates"] = color_access
 
-        # Mana surplus/deficit — can you produce mana matching the turn number?
+        # Mana surplus/deficit
         mana_deficit_count = 0
         for game in all_games:
             if turn_idx < len(game["turns"]):

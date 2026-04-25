@@ -7,24 +7,23 @@ async def test():
         resp = await client.get("https://archidekt.com/api/decks/1/", timeout=10.0)
         data = resp.json()
         cards = data.get("cards", [])
-        if cards:
-            card_data = cards[0].get("card", {})
-            print(f"Card keys: {list(card_data.keys())}")
-            # Look for name and oracle id / scryfall connection
-            print(f"Card name: {card_data.get('name', 'N/A')}")
-            print(f"Oracle ID: {card_data.get('oracleId', 'N/A')}")
-            print(f"UID: {card_data.get('uid', 'N/A')}")
-            # Check for scryfall-related fields
-            for key in card_data:
-                val = card_data[key]
-                if isinstance(val, str) and "scryfall" in str(val).lower():
-                    print(f"Scryfall field - {key}: {val}")
-                if isinstance(val, str) and len(val) == 36 and "-" in val:
-                    print(f"UUID field - {key}: {val}")
-
-        # Also check deck-level info
-        print(f"\nDeck format: {data.get('deckFormat', 'N/A')}")
-        print(f"Deck name: {data.get('name', 'N/A')}")
-        print(f"Description: {str(data.get('description', ''))[:100]}")
+        
+        for i, entry in enumerate(cards[:3]):
+            card = entry.get("card", {})
+            oracle = card.get("oracleCard", {})
+            print(f"\n--- Card {i+1} ---")
+            print(f"displayName: {card.get('displayName', 'N/A')}")
+            print(f"uid: {card.get('uid', 'N/A')}")
+            print(f"edition: {json.dumps(card.get('edition', {}))[:200]}")
+            print(f"categories: {entry.get('categories', [])}")
+            print(f"quantity: {entry.get('quantity', 0)}")
+            print(f"oracleCard keys: {list(oracle.keys()) if oracle else 'N/A'}")
+            if oracle:
+                print(f"  oracle name: {oracle.get('name', 'N/A')}")
+                print(f"  oracle scryfallId: {oracle.get('scryfallId', 'N/A')}")
+                print(f"  oracle oracleId: {oracle.get('oracleId', 'N/A')}")
+        
+        # Check deck format mapping
+        print(f"\nDeck format code: {data.get('deckFormat', 'N/A')}")
 
 asyncio.run(test())

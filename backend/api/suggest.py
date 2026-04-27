@@ -40,6 +40,7 @@ async def suggest_cards(
             "format": deck.format,
             "description": deck.description,
             "strategy_profile": deck.strategy_profile,
+            "preferences": deck.preferences,
         }
 
         # Use cached simulation from strategy profile

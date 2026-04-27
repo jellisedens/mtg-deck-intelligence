@@ -18,6 +18,15 @@ class DeckUpdate(BaseModel):
     description: Optional[str] = None
 
 
+class DeckPreferences(BaseModel):
+    """User-defined deck intent and constraints."""
+    strategy_notes: Optional[str] = None
+    color_preferences: Optional[str] = None
+    card_type_preferences: Optional[str] = None
+    budget: Optional[str] = None
+    other_notes: Optional[str] = None
+
+
 class DeckCardResponse(BaseModel):
     id: UUID
     scryfall_id: str
@@ -34,6 +43,7 @@ class DeckResponse(BaseModel):
     name: str
     format: str
     description: Optional[str]
+    preferences: Optional[dict] = None
     created_at: datetime
     updated_at: datetime
 

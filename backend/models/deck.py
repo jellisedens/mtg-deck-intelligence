@@ -15,6 +15,7 @@ class Deck(Base):
     format = Column(String, nullable=False, default="commander")
     description = Column(String, nullable=True)
     strategy_profile = Column(JSON, nullable=True)
+    preferences = Column(JSON, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

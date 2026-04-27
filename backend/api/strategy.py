@@ -34,6 +34,9 @@ async def generate_deck_strategy(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    """
+    Generate a strategic profile with fully parallelized AI calls.
+    """
     deck = db.query(Deck).filter(Deck.id == deck_id).first()
     if not deck:
         raise HTTPException(status_code=404, detail="Deck not found")
@@ -51,7 +54,12 @@ async def generate_deck_strategy(
     t = time.time()
     analytics = await compute_analytics(cards, include_card_data=True)
     card_lookup = analytics.pop("_card_lookup", {})
-    deck_info = {"name": deck.name, "format": deck.format, "description": deck.description}
+    deck_info = {
+        "name": deck.name,
+        "format": deck.format,
+        "description": deck.description,
+        "preferences": deck.preferences,
+    }
     print(f"TIMING: analytics (Scryfall) = {time.time() - t:.1f}s")
 
     # Step 2: PARALLEL PHASE 1 - role classification + base profile + sim tag batches
@@ -67,7 +75,8 @@ async def generate_deck_strategy(
         _executor,
         lambda: generate_base_profile(
             deck_info=deck_info, deck_cards=cards, card_lookup=card_lookup,
-            analytics=analytics, role_data={"primary_creature_type": "None", "role_distribution": {}, "card_roles": []},
+            analytics=analytics,
+            role_data={"primary_creature_type": "None", "role_distribution": {}, "card_roles": []},
         )
     )
 
@@ -193,6 +202,7 @@ async def get_deck_strategy(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    """Get the stored strategic profile for a deck."""
     deck = db.query(Deck).filter(Deck.id == deck_id).first()
     if not deck:
         raise HTTPException(status_code=404, detail="Deck not found")

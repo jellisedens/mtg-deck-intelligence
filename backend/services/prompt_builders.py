@@ -49,6 +49,9 @@ Rules:
 - If simulation data shows weak colors, prioritize fixing for those colors
 - If Mana Health scores are provided, use FIX FIRST colors to prioritize suggestions
 - Cite specific numbers from the deck summary in your reasoning
+- If USER PREFERENCES specify color constraints, ONLY suggest cards in the allowed colors
+- If USER PREFERENCES specify card type preferences, prioritize those types
+- USER PREFERENCES always take priority over analytical recommendations
 
 {synergy_rules}
 {strategic_context}"""
@@ -69,7 +72,12 @@ Rules:
     if color_health_str:
         user_msg += f"\n{color_health_str}\n"
 
-    user_msg += f"Search results ({len(search_results)} cards):\n"
+    # Add user preferences
+    prefs_str = _get_user_preferences(deck_info)
+    if prefs_str:
+        user_msg += f"\n{prefs_str}\n"
+
+    user_msg += f"\nSearch results ({len(search_results)} cards):\n"
     for card in search_results:
         price = card.get("prices", {}).get("usd", "N/A")
         user_msg += f"- {card['name']} | {card['mana_cost']} | {card['type_line']} | ${price} | ID: {card['scryfall_id']}\n"
@@ -115,7 +123,9 @@ Rules:
 - If Mana Health shows CRITICAL colors, do NOT cut cards that produce those colors
 - If all candidates score 5+, note the deck is well-optimized but still pick the lowest
 - Explain what the deck loses with each cut and why it is acceptable
-- Do NOT return an empty cuts array - this is your primary task"""
+- Do NOT return an empty cuts array - this is your primary task
+- If USER PREFERENCES specify card type preferences, avoid cutting cards of the preferred type
+- USER PREFERENCES always take priority over analytical recommendations"""
 
     user_msg = f"User request: {prompt}\n\n"
 
@@ -131,6 +141,11 @@ Rules:
     color_health_str = _get_cached_color_health(deck_info)
     if color_health_str:
         user_msg += f"\n{color_health_str}\n"
+
+    # Add user preferences
+    prefs_str = _get_user_preferences(deck_info)
+    if prefs_str:
+        user_msg += f"\n{prefs_str}\n"
 
     # Add cut candidates
     cut_context = build_cut_context(
@@ -179,7 +194,10 @@ Rules:
 - When Mana Health scores are provided, use them as the authoritative source for color fixing priorities
 - The color with the LOWEST Mana Health score is the #1 fix priority
 - Colors marked CRITICAL (below 65) need immediate attention
-- Always reference the Mana Health FIX FIRST recommendation in your top priorities"""
+- Always reference the Mana Health FIX FIRST recommendation in your top priorities
+- If USER PREFERENCES specify color constraints, respect them - do NOT recommend adding sources for excluded colors
+- If USER PREFERENCES state a color is intentionally excluded, acknowledge this and skip it in color analysis
+- USER PREFERENCES always take priority over analytical recommendations"""
 
     user_msg = f"User request: {prompt}\n\n"
 
@@ -195,6 +213,11 @@ Rules:
     color_health_str = _get_cached_color_health(deck_info)
     if color_health_str:
         user_msg += f"\n{color_health_str}\n"
+
+    # Add user preferences
+    prefs_str = _get_user_preferences(deck_info)
+    if prefs_str:
+        user_msg += f"\n{prefs_str}\n"
 
     # Add impact distribution if available
     profile = (deck_info or {}).get("strategy_profile") or {}
@@ -255,6 +278,10 @@ Rules:
 - Only suggest adding cards that appear in search results with exact scryfall_id
 - If simulation data shows weak areas, prioritize swaps that fix those areas
 - If Mana Health shows CRITICAL colors, prioritize replacements that produce those colors
+- If USER PREFERENCES specify constraints, ensure ALL replacements respect them
+- If USER PREFERENCES specify color constraints, do NOT suggest cards in excluded colors
+- If USER PREFERENCES specify card type preferences, prioritize those types for replacements
+- USER PREFERENCES always take priority over analytical recommendations
 
 {synergy_rules}
 {strategic_context}"""
@@ -274,6 +301,11 @@ Rules:
     color_health_str = _get_cached_color_health(deck_info)
     if color_health_str:
         user_msg += f"\n{color_health_str}\n"
+
+    # Add user preferences
+    prefs_str = _get_user_preferences(deck_info)
+    if prefs_str:
+        user_msg += f"\n{prefs_str}\n"
 
     # Cut candidates
     cut_context = build_cut_context(
@@ -316,3 +348,27 @@ def _get_cached_color_health(deck_info: dict) -> str:
     if health_data:
         return format_color_health_for_prompt(health_data)
     return ""
+
+
+def _get_user_preferences(deck_info: dict) -> str:
+    """Format user preferences as a prompt section."""
+    if not deck_info:
+        return ""
+    preferences = deck_info.get("preferences") or {}
+    if not preferences:
+        return ""
+
+    lines = ["USER PREFERENCES (these override all other recommendations):"]
+
+    if preferences.get("strategy_notes"):
+        lines.append(f"- Strategy: {preferences['strategy_notes']}")
+    if preferences.get("color_preferences"):
+        lines.append(f"- Color constraints: {preferences['color_preferences']}")
+    if preferences.get("card_type_preferences"):
+        lines.append(f"- Card type preferences: {preferences['card_type_preferences']}")
+    if preferences.get("budget"):
+        lines.append(f"- Budget: {preferences['budget']}")
+    if preferences.get("other_notes"):
+        lines.append(f"- Notes: {preferences['other_notes']}")
+
+    return "\n".join(lines)

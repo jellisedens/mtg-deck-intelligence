@@ -15,6 +15,7 @@ from api.schemas.deck import (
     CardAdd,
     CardUpdate,
     DeckCardResponse,
+    DeckPreferences,
 )
 
 router = APIRouter(prefix="/decks", tags=["decks"])
@@ -254,6 +255,29 @@ def update_card(
     db.refresh(card)
     return card
 
+@router.put("/{deck_id}/preferences", response_model=DeckResponse)
+def update_preferences(
+    deck_id: UUID,
+    request: DeckPreferences,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Update deck preferences (user intent, constraints, play style).
+    These preferences are injected into all AI prompts to ensure
+    suggestions align with the user's vision for the deck.
+    """
+    deck = _get_user_deck(deck_id, user, db)
+
+    # Merge with existing preferences (don't overwrite fields not provided)
+    current = deck.preferences or {}
+    update_data = request.model_dump(exclude_none=True)
+    current.update(update_data)
+    deck.preferences = current
+
+    db.commit()
+    db.refresh(deck)
+    return deck
 
 @router.delete("/{deck_id}/cards/{card_id}", status_code=status.HTTP_204_NO_CONTENT)
 def remove_card(

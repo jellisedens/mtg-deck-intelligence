@@ -1,0 +1,84 @@
+@import url("https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&family=IBM+Plex+Sans:wght@300;400;500;600;700&display=swap");
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-bg-primary text-text-primary font-mono antialiased;
+  }
+
+  /* Terminal-style scrollbar */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    @apply bg-bg-primary;
+  }
+  ::-webkit-scrollbar-thumb {
+    @apply bg-border rounded-full;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-border-focus;
+  }
+
+  /* Selection color */
+  ::selection {
+    @apply bg-accent-green/20 text-accent-green;
+  }
+}
+
+@layer components {
+  /* Terminal-style input */
+  .input-terminal {
+    @apply w-full bg-bg-secondary border border-border rounded px-3 py-2
+           text-sm text-text-primary placeholder-text-muted
+           focus:outline-none focus:border-accent-green/50 focus:ring-1 focus:ring-accent-green/20
+           transition-colors duration-150;
+  }
+
+  /* Primary action button */
+  .btn-primary {
+    @apply px-4 py-2 text-sm font-medium rounded
+           bg-accent-green/10 text-accent-green border border-accent-green/30
+           hover:bg-accent-green/20 hover:border-accent-green/50
+           active:bg-accent-green/30
+           transition-all duration-150
+           disabled:opacity-40 disabled:cursor-not-allowed;
+  }
+
+  /* Ghost button */
+  .btn-ghost {
+    @apply px-4 py-2 text-sm font-medium rounded
+           text-text-secondary
+           hover:bg-bg-hover hover:text-text-primary
+           transition-all duration-150;
+  }
+
+  /* Danger button */
+  .btn-danger {
+    @apply px-4 py-2 text-sm font-medium rounded
+           bg-accent-red/10 text-accent-red border border-accent-red/30
+           hover:bg-accent-red/20 hover:border-accent-red/50
+           transition-all duration-150;
+  }
+
+  /* Card/panel container */
+  .panel {
+    @apply bg-bg-secondary border border-border rounded-lg;
+  }
+
+  /* Terminal prompt prefix */
+  .prompt::before {
+    content: "$ ";
+    @apply text-accent-green;
+  }
+
+  /* Blinking cursor animation */
+  .cursor-blink::after {
+    content: "█";
+    @apply text-accent-green animate-pulse;
+  }
+}

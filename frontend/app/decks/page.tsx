@@ -66,7 +66,6 @@ function DecksContent() {
 
   return (
     <div>
-      {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-lg font-bold text-text-primary">
@@ -92,7 +91,6 @@ function DecksContent() {
         </div>
       </div>
 
-      {/* Deck list */}
       {decks.length === 0 ? (
         <div className="panel p-8 text-center">
           <p className="text-text-secondary text-sm mb-3">no decks yet</p>
@@ -168,7 +166,6 @@ function DecksContent() {
         </div>
       )}
 
-      {/* Modals */}
       {showCreate && (
         <CreateDeckModal
           onClose={() => setShowCreate(false)}

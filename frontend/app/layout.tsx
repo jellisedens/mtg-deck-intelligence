@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import { AuthProvider } from "@/lib/auth-context";
+import { CardCacheProvider } from "@/lib/card-cache";
 import Nav from "@/components/Nav";
 
 export const metadata: Metadata = {
@@ -17,8 +18,10 @@ export default function RootLayout({
     <html lang="en">
       <body>
         <AuthProvider>
-          <Nav />
-          <main className="pt-12">{children}</main>
+          <CardCacheProvider>
+            <Nav />
+            <main className="pt-12">{children}</main>
+          </CardCacheProvider>
         </AuthProvider>
       </body>
     </html>

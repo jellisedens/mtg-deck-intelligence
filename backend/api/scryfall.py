@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Query
 
 from services.scryfall import scryfall_service
+from pydantic import BaseModel
 
 router = APIRouter(prefix="/scryfall", tags=["scryfall"])
 
@@ -44,3 +45,15 @@ async def autocomplete(
     Fast endpoint for powering search-as-you-type UI.
     """
     return await scryfall_service.autocomplete(q)
+
+class CollectionRequest(BaseModel):
+    identifiers: list[dict]
+
+@router.post("/collection")
+async def get_collection(request: CollectionRequest):
+    """
+    Fetch multiple cards at once by Scryfall ID.
+    Accepts up to 75 identifiers per batch (handled automatically).
+    Each identifier should be {"id": "scryfall-uuid"}.
+    """
+    return await scryfall_service.get_collection(request.identifiers)

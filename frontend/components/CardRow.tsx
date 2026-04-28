@@ -10,6 +10,7 @@ interface Props {
   cardData?: ScryfallCard;
   onUpdateQuantity: (cardId: string, quantity: number) => void;
   onRemoveCard: (cardId: string) => void;
+  onUpdateNotes: (cardId: string, notes: string) => void;
   format: string;
 }
 
@@ -18,10 +19,12 @@ export default function CardRow({
   cardData,
   onUpdateQuantity,
   onRemoveCard,
+  onUpdateNotes,
   format,
 }: Props) {
   const [expanded, setExpanded] = useState(false);
   const isSingleton = format === "commander";
+  const aiContext = card.ai_context;
 
   return (
     <div className="group">
@@ -63,6 +66,20 @@ export default function CardRow({
           {card.card_name}
         </button>
 
+        {/* Role name */}
+        {aiContext?.role && (
+          <span className="text-xxs text-text-muted flex-shrink-0">
+            {aiContext.role}
+          </span>
+        )}
+
+        {/* Notes indicator */}
+        {card.notes && (
+          <span className="text-xxs text-accent-yellow flex-shrink-0" title="Has notes">
+            ✎
+          </span>
+        )}
+
         {/* Mana cost */}
         {cardData && <ManaCost cost={cardData.mana_cost} />}
 
@@ -78,7 +95,11 @@ export default function CardRow({
       {/* Expanded detail */}
       {expanded && cardData && (
         <div className="ml-12 mr-2 mb-3 mt-1 p-3 bg-bg-primary rounded border border-border">
-          <CardDetail cardData={cardData} />
+          <CardDetail
+            cardData={cardData}
+            deckCard={card}
+            onUpdateNotes={onUpdateNotes}
+          />
         </div>
       )}
       {expanded && !cardData && (

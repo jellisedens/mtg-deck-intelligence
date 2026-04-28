@@ -33,6 +33,8 @@ class DeckCardResponse(BaseModel):
     card_name: str
     quantity: int
     board: str
+    notes: Optional[str] = None
+    ai_context: Optional[dict] = None
 
     class Config:
         from_attributes = True
@@ -68,3 +70,4 @@ class CardAdd(BaseModel):
 class CardUpdate(BaseModel):
     quantity: Optional[int] = None
     board: Optional[str] = None
+    notes: Optional[str] = None

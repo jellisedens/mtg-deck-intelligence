@@ -105,6 +105,18 @@ function DeckBuilderContent({ deckId }: { deckId: string }) {
     }
   }
 
+  async function handleUpdateNotes(cardId: string, notes: string) {
+    setActionError("");
+    try {
+      const updated = await updateCard(deckId, cardId, { notes });
+      setDeck(updated);
+    } catch (err: unknown) {
+      setActionError(
+        err instanceof Error ? err.message : "Failed to save notes"
+      );
+    }
+  }
+
   if (loading) {
     return (
       <div className="text-text-muted text-sm">
@@ -184,6 +196,7 @@ function DeckBuilderContent({ deckId }: { deckId: string }) {
             onUpdateQuantity={handleUpdateQuantity}
             onRemoveCard={handleRemoveCard}
             onChangeBoard={handleChangeBoard}
+            onUpdateNotes={handleUpdateNotes}
             format={deck.format}
           />
         </div>

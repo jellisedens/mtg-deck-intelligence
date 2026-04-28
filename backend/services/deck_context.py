@@ -73,8 +73,12 @@ def build_deck_context(deck_cards: list, deck_info: dict, analytics: dict,
         lines.append(f"  {card.quantity}x {card.card_name} ({card.board}) {role_str}")
         if oracle_text:
             lines.append(f"     Text: {oracle_text[:120]}")
-        if synergy:
-            lines.append(f"     Synergy: {synergy}")
+        if hasattr(card, 'notes') and card.notes:
+            lines.append(f"     User notes: {card.notes}")
+        if hasattr(card, 'ai_context') and card.ai_context:
+            ai_ctx = card.ai_context
+            if ai_ctx.get('impact_score'):
+                lines.append(f"     Impact: {ai_ctx['impact_score']}/10 - {ai_ctx.get('impact_reason', '')}")
 
     identity = analytics.get("deck_identity", {})
     if identity:

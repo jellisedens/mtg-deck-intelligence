@@ -39,6 +39,7 @@ interface Props {
   onUpdateQuantity: (cardId: string, quantity: number) => void;
   onRemoveCard: (cardId: string) => void;
   onChangeBoard: (cardId: string, board: string) => void;
+  onUpdateNotes: (cardId: string, notes: string) => void;
   format: string;
 }
 
@@ -48,6 +49,7 @@ export default function DeckList({
   onUpdateQuantity,
   onRemoveCard,
   onChangeBoard,
+  onUpdateNotes,
   format,
 }: Props) {
   const totalCards = cards.reduce((sum, c) => sum + c.quantity, 0);
@@ -147,6 +149,7 @@ export default function DeckList({
                           cardData={cardDataMap[card.scryfall_id]}
                           onUpdateQuantity={onUpdateQuantity}
                           onRemoveCard={onRemoveCard}
+                          onUpdateNotes={onUpdateNotes}
                           format={format}
                         />
                       ))}

@@ -250,6 +250,9 @@ def update_card(
     if request.board is not None:
         card.board = request.board
 
+    if request.notes is not None:
+        card.notes = request.notes
+
     _invalidate_strategy_cache(deck)
     db.commit()
     db.refresh(card)

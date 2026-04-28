@@ -1,6 +1,6 @@
 import uuid
-from sqlalchemy import Column, String, Integer, ForeignKey
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import Column, String, Integer, ForeignKey, Text
+from sqlalchemy.dialects.postgresql import UUID, JSON
 from sqlalchemy.orm import relationship
 from database.session import Base
 
@@ -14,6 +14,8 @@ class DeckCard(Base):
     card_name = Column(String, nullable=False)
     quantity = Column(Integer, nullable=False, default=1)
     board = Column(String, nullable=False, default="main")
+    notes = Column(Text, nullable=True)
+    ai_context = Column(JSON, nullable=True)
 
     # Relationships
     deck = relationship("Deck", back_populates="cards")

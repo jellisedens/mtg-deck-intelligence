@@ -181,8 +181,32 @@ async def generate_deck_strategy(
         "primary_creature_type": role_data.get("primary_creature_type"),
     }
 
-    # Save
+    # Save strategy profile
     deck.strategy_profile = profile
+
+    # Write per-card AI context to deck_cards
+    impact_lookup = {}
+    for rating in deduped:
+        impact_lookup[rating.get("card_name", "").lower()] = rating
+
+    role_lookup = {}
+    for cr in role_data.get("card_roles", []):
+        role_lookup[cr["name"].lower()] = cr
+
+    for card in cards:
+        card_name_lower = card.card_name.lower()
+        impact = impact_lookup.get(card_name_lower, {})
+        role_info = role_lookup.get(card_name_lower, {})
+
+        card.ai_context = {
+            "role": role_info.get("primary_role", "unknown"),
+            "secondary_roles": role_info.get("secondary_roles", []),
+            "impact_score": impact.get("score", None),
+            "impact_reason": impact.get("reason", None),
+            "synergy_notes": role_info.get("synergy_notes", ""),
+            "is_critical": card.card_name in profile.get("critical_cards", []),
+        }
+
     db.commit()
     db.refresh(deck)
 

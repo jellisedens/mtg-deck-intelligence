@@ -153,11 +153,11 @@ function ManaTab({ turnData }: { turnData: TurnData[] }) {
         <thead>
           <tr className="text-text-muted border-b border-border">
             <th className="text-left py-1.5 pr-2 font-medium">turn</th>
-            <th className="text-right py-1.5 px-2 font-medium">lands</th>
-            <th className="text-right py-1.5 px-2 font-medium">mana</th>
-            <th className="text-right py-1.5 px-2 font-medium">ramp+</th>
-            <th className="text-right py-1.5 px-2 font-medium">on curve</th>
-            <th className="text-right py-1.5 pl-2 font-medium">castable</th>
+            <th className="text-right py-1.5 px-2 font-medium" title="Average lands on the battlefield">lands</th>
+            <th className="text-right py-1.5 px-2 font-medium" title="Total mana available including rocks and ramp">mana</th>
+            <th className="text-right py-1.5 px-2 font-medium" title="Extra mana beyond land count — shows how much your ramp adds">ramp+</th>
+            <th className="text-right py-1.5 px-2 font-medium" title="% of games where total mana meets or exceeds the turn number">on curve</th>
+            <th className="text-right py-1.5 pl-2 font-medium" title="Average spells you can cast after playing a land">castable</th>
           </tr>
         </thead>
         <tbody>
@@ -191,11 +191,11 @@ function BoardTab({ turnData }: { turnData: TurnData[] }) {
         <thead>
           <tr className="text-text-muted border-b border-border">
             <th className="text-left py-1.5 pr-2 font-medium">turn</th>
-            <th className="text-right py-1.5 px-2 font-medium">creatures</th>
-            <th className="text-right py-1.5 px-2 font-medium">power</th>
-            <th className="text-right py-1.5 px-2 font-medium">permanents</th>
-            <th className="text-right py-1.5 px-2 font-medium">hand</th>
-            <th className="text-right py-1.5 pl-2 font-medium">stuck</th>
+            <th className="text-right py-1.5 px-2 font-medium" title="Average creatures on the battlefield">creatures</th>
+            <th className="text-right py-1.5 px-2 font-medium" title="Total power of creatures on board — your damage potential">power</th>
+            <th className="text-right py-1.5 px-2 font-medium" title="All non-land permanents on board (creatures, artifacts, enchantments)">permanents</th>
+            <th className="text-right py-1.5 px-2 font-medium" title="Cards remaining in hand">hand</th>
+            <th className="text-right py-1.5 pl-2 font-medium" title="Cards in hand you can't cast — too expensive or wrong colors">stuck</th>
           </tr>
         </thead>
         <tbody>
@@ -228,7 +228,7 @@ function ColorsTab({ turnData }: { turnData: TurnData[] }) {
         <table className="w-full text-xs">
           <thead>
             <tr className="text-text-muted border-b border-border">
-              <th className="text-left py-1.5 pr-2 font-medium">turn</th>
+              <th className="text-right py-1.5 pl-2 font-medium" title="% of games where all 5 colors are available">all 5</th>
               {colors.map((c) => (
                 <th key={c} className="text-right py-1.5 px-1 font-medium">
                   <span className="inline-block w-3 h-3 rounded-full" style={{ background: COLOR_LABELS[c].fill }} />

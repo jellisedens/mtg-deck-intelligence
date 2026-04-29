@@ -212,7 +212,7 @@ async def generate_deck_strategy(
 
     print(f"TIMING: TOTAL = {time.time() - total_start:.1f}s")
 
-    response = {k: v for k, v in profile.items() if k not in ("sim_tags", "cached_simulation")}
+    response = {k: v for k, v in profile.items() if k not in ("sim_tags",)}
     response["sim_tags_generated"] = len(sim_tags)
     response["roles_classified"] = len(role_data.get("card_roles", []))
     response["simulation_games"] = sim_results.get("games_simulated", 0) if main_deck_cards else 0
@@ -237,5 +237,5 @@ async def get_deck_strategy(
         raise HTTPException(status_code=404, detail="No strategy profile generated yet.")
 
     profile = deck.strategy_profile
-    response = {k: v for k, v in profile.items() if k not in ("sim_tags", "cached_simulation")}
+    response = {k: v for k, v in profile.items() if k not in ("sim_tags",)}
     return response

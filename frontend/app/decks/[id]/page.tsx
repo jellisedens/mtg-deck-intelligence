@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import CardSearch from "@/components/CardSearch";
 import DeckList from "@/components/DeckList";
+import DeckAnalytics from "@/components/DeckAnalytics";
 import { getDeck, addCard, updateCard, removeCard } from "@/lib/api";
 import { useCardCache } from "@/lib/card-cache";
 import { Deck, ScryfallCard } from "@/lib/types";
@@ -202,47 +203,10 @@ function DeckBuilderContent({ deckId }: { deckId: string }) {
         </div>
 
         <div className="space-y-4">
-          <div className="panel p-4">
-            <div className="text-xs text-text-muted font-medium uppercase tracking-wider mb-3">
-              Quick Stats
-            </div>
-            <div className="space-y-2 text-sm">
-              <div className="flex justify-between">
-                <span className="text-text-secondary">total cards</span>
-                <span className="text-text-primary">
-                  {deck.cards?.reduce((sum, c) => sum + c.quantity, 0) || 0}
-                </span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-text-secondary">unique cards</span>
-                <span className="text-text-primary">
-                  {deck.cards?.length || 0}
-                </span>
-              </div>
-              {Object.keys(cardDataMap).length > 0 && deck.cards && (
-                <div className="flex justify-between pt-2 border-t border-border">
-                  <span className="text-text-secondary">est. value</span>
-                  <span className="text-accent-green">
-                    $
-                    {deck.cards
-                      .reduce((sum, c) => {
-                        const price = parseFloat(
-                          cardDataMap[c.scryfall_id]?.prices?.usd || "0"
-                        );
-                        return sum + price * c.quantity;
-                      }, 0)
-                      .toFixed(2)}
-                  </span>
-                </div>
-              )}
-            </div>
-          </div>
-
-          <div className="panel p-4 text-center">
-            <p className="text-text-muted text-xs">
-              analytics, simulation & AI coming soon
-            </p>
-          </div>
+          <DeckAnalytics
+            deckId={deckId}
+            cardCount={deck.cards?.reduce((sum, c) => sum + c.quantity, 0) || 0}
+          />
         </div>
       </div>
     </div>

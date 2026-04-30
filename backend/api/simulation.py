@@ -19,7 +19,7 @@ router = APIRouter(prefix="/decks", tags=["simulation"])
 _sim_tag_cache = {}
 
 async def _build_deck_for_simulation(deck_id: UUID, user: User, db: Session) -> tuple:
-    """Fetch deck cards and their Scryfall data, generate sim tags."""
+    """Fetch deck cards and their Scryfall data, use cached sim tags from strategy profile."""
     deck = db.query(Deck).filter(Deck.id == deck_id).first()
     if not deck:
         raise HTTPException(status_code=404, detail="Deck not found")
@@ -51,13 +51,16 @@ async def _build_deck_for_simulation(deck_id: UUID, user: User, db: Session) -> 
                 "quantity": deck_card.quantity,
             })
 
-   # Generate simulation tags (cached per deck)
-    cache_key = str(deck_id)
-    if cache_key in _sim_tag_cache:
-        sim_tags = _sim_tag_cache[cache_key]
+    # Use cached sim tags from strategy profile first, then in-memory cache, then generate
+    sim_tags = None
+    if deck.strategy_profile and deck.strategy_profile.get("sim_tags"):
+        sim_tags = deck.strategy_profile["sim_tags"]
+    elif str(deck_id) in _sim_tag_cache:
+        sim_tags = _sim_tag_cache[str(deck_id)]
     else:
+        # Only generate if no cache exists anywhere — this is the slow path
         sim_tags = generate_sim_tags(deck_cards, card_lookup)
-        _sim_tag_cache[cache_key] = sim_tags
+        _sim_tag_cache[str(deck_id)] = sim_tags
 
     return main_deck_cards, sim_tags
 

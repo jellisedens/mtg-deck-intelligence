@@ -6,6 +6,7 @@ import ProtectedRoute from "@/components/ProtectedRoute";
 import CardSearch from "@/components/CardSearch";
 import DeckList from "@/components/DeckList";
 import DeckAnalytics from "@/components/DeckAnalytics";
+import HandSimulator from "@/components/HandSimulator";
 import { getDeck, addCard, updateCard, removeCard } from "@/lib/api";
 import { useCardCache } from "@/lib/card-cache";
 import { Deck, ScryfallCard } from "@/lib/types";
@@ -17,6 +18,7 @@ function DeckBuilderContent({ deckId }: { deckId: string }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [actionError, setActionError] = useState("");
+  const [showHandSim, setShowHandSim] = useState(false);
 
   const { cardDataMap, fetchCards, addCard: cacheCard, isLoading: cardsLoading } = useCardCache();
 
@@ -167,6 +169,12 @@ function DeckBuilderContent({ deckId }: { deckId: string }) {
             )}
           </div>
         </div>
+        <button
+          onClick={() => setShowHandSim(true)}
+          className="btn-primary text-xs"
+        >
+          draw hand
+        </button>
       </div>
 
       {actionError && (
@@ -209,6 +217,13 @@ function DeckBuilderContent({ deckId }: { deckId: string }) {
           />
         </div>
       </div>
+
+      {showHandSim && (
+        <HandSimulator
+          deckId={deckId}
+          onClose={() => setShowHandSim(false)}
+        />
+      )}
     </div>
   );
 }

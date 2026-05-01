@@ -7,6 +7,8 @@ import CardSearch from "@/components/CardSearch";
 import DeckList from "@/components/DeckList";
 import DeckAnalytics from "@/components/DeckAnalytics";
 import HandSimulator from "@/components/HandSimulator";
+import GameSimulator from "@/components/GameSimulator";
+import AISuggestPanel from "@/components/AISuggestPanel";
 import { getDeck, addCard, updateCard, removeCard } from "@/lib/api";
 import { useCardCache } from "@/lib/card-cache";
 import { Deck, ScryfallCard } from "@/lib/types";
@@ -19,6 +21,7 @@ function DeckBuilderContent({ deckId }: { deckId: string }) {
   const [error, setError] = useState("");
   const [actionError, setActionError] = useState("");
   const [showHandSim, setShowHandSim] = useState(false);
+  const [showGameSim, setShowGameSim] = useState(false);
 
   const { cardDataMap, fetchCards, addCard: cacheCard, isLoading: cardsLoading } = useCardCache();
 
@@ -169,12 +172,20 @@ function DeckBuilderContent({ deckId }: { deckId: string }) {
             )}
           </div>
         </div>
-        <button
-          onClick={() => setShowHandSim(true)}
-          className="btn-primary text-xs"
-        >
-          draw hand
-        </button>
+        <div className="flex gap-2">
+          <button
+            onClick={() => setShowHandSim(true)}
+            className="btn-primary text-xs"
+          >
+            draw hand
+          </button>
+          <button
+            onClick={() => setShowGameSim(true)}
+            className="btn-ghost text-xs"
+          >
+            simulate games
+          </button>
+        </div>
       </div>
 
       {actionError && (
@@ -211,6 +222,7 @@ function DeckBuilderContent({ deckId }: { deckId: string }) {
         </div>
 
         <div className="space-y-4">
+          <AISuggestPanel deckId={deckId} />
           <DeckAnalytics
             deckId={deckId}
             cardCount={deck.cards?.reduce((sum, c) => sum + c.quantity, 0) || 0}
@@ -221,7 +233,15 @@ function DeckBuilderContent({ deckId }: { deckId: string }) {
       {showHandSim && (
         <HandSimulator
           deckId={deckId}
+          cards={deck.cards || []}
           onClose={() => setShowHandSim(false)}
+        />
+      )}
+
+      {showGameSim && (
+        <GameSimulator
+          deckId={deckId}
+          onClose={() => setShowGameSim(false)}
         />
       )}
     </div>

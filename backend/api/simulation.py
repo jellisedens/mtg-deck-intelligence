@@ -125,6 +125,8 @@ async def simulate_games(
     db: Session = Depends(get_db),
     n_games: int = 100,
     turns: int = 10,
+    min_lands: int = 2,
+    max_lands: int = 5,
 ):
     """
     Simulate N goldfish games over multiple turns.
@@ -143,6 +145,8 @@ async def simulate_games(
         sim_tags=sim_tags,
         n_games=n_games,
         turns=turns,
+        min_lands=min_lands,
+        max_lands=max_lands,
     )
 
     return result

@@ -1,37 +1,20 @@
 "use client";
 
-import { useState } from "react";
-import { simulateHand } from "@/lib/api";
-
-interface HandCard {
-  card_name: string;
-  scryfall_id: string;
-  quantity: number;
-  board: string;
-}
-
-interface HandResult {
-  hand: string[];
-  land_count: number;
-  nonland_count: number;
-}
-
-interface SimStats {
-  avg_lands: number;
-  land_distribution: Record<string, number>;
-}
+import { useState, useEffect } from "react";
+import { DeckCard } from "@/lib/types";
 
 interface Props {
   deckId: string;
+  cards: DeckCard[];
   onClose: () => void;
 }
 
-function CardInHand({ name, scryfallId }: { name: string; scryfallId?: string }) {
+function CardInHand({ name, scryfallId }: { name: string; scryfallId: string }) {
   const [imgError, setImgError] = useState(false);
 
   return (
-    <div className="flex-shrink-0 group relative">
-      {scryfallId && !imgError ? (
+    <div className="flex-shrink-0">
+      {!imgError ? (
         <img
           src={`https://api.scryfall.com/cards/${scryfallId}?format=image&version=normal`}
           alt={name}
@@ -48,73 +31,84 @@ function CardInHand({ name, scryfallId }: { name: string; scryfallId?: string })
   );
 }
 
-export default function HandSimulator({ deckId, onClose }: Props) {
-  const [hand, setHand] = useState<HandResult | null>(null);
-  const [stats, setStats] = useState<SimStats | null>(null);
-  const [mulliganCount, setMulliganCount] = useState(0);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-  const [cardLookup, setCardLookup] = useState<Record<string, string>>({});
+function shuffle<T>(arr: T[]): T[] {
+  const shuffled = [...arr];
+  for (let i = shuffled.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+  }
+  return shuffled;
+}
 
-  async function drawHand() {
-    setLoading(true);
-    setError("");
+function isLand(card: DeckCard): boolean {
+  if (card.ai_context?.role === "land") return true;
+  const lower = card.card_name.toLowerCase();
+  const landWords = [
+    "forest", "mountain", "plains", "island", "swamp",
+    "bog", "glade", "vista", "stream", "hollow", "marsh",
+    "foundry", "vents", "tomb", "grave", "garden", "fountain",
+    "shrine", "crypt", "tower", "orchard", "territory",
+    "passage", "pool", "haven", "path of ancestry",
+  ];
+  return landWords.some((w) => lower.includes(w));
+}
 
-    try {
-      const result = await simulateHand(deckId, 1);
-
-      // Build scryfall_id lookup from the raw response
-      if (result.hands && result.hands.length > 0) {
-        const firstHand = result.hands[0];
-        setHand({
-          hand: firstHand.cards || [],
-          land_count: firstHand.land_count || 0,
-          nonland_count: firstHand.nonland_count || 0,
-        });
-      }
-
-      if (result.statistics) {
-        setStats({
-          avg_lands: result.statistics.avg_lands || 0,
-          land_distribution: result.statistics.land_distribution || {},
-        });
-      }
-
-      // card_lookup may not be in the response — that's ok
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Failed to simulate hand");
-    } finally {
-      setLoading(false);
+function buildPool(cards: DeckCard[]): DeckCard[] {
+  const pool: DeckCard[] = [];
+  for (const card of cards) {
+    if (card.board === "sideboard") continue;
+    for (let i = 0; i < card.quantity; i++) {
+      pool.push(card);
     }
   }
+  return pool;
+}
 
-  async function mulligan() {
-    setMulliganCount((prev) => prev + 1);
-    await drawHand();
+export default function HandSimulator({ deckId, cards, onClose }: Props) {
+  const [hand, setHand] = useState<DeckCard[]>([]);
+  const [mulliganCount, setMulliganCount] = useState(0);
+  const [handHistory, setHandHistory] = useState<{ lands: number; spells: number }[]>([]);
+
+  function drawHand(drawCount?: number) {
+    const count = drawCount ?? 7;
+    const pool = buildPool(cards);
+    const shuffled = shuffle(pool);
+    setHand(shuffled.slice(0, count));
   }
 
-  async function keepHand() {
-    // Reset for a new simulation
-    setHand(null);
+  function mulligan() {
+    const newCount = mulliganCount + 1;
+    if (7 - newCount < 1) return;
+    setMulliganCount(newCount);
+    drawHand(7 - newCount);
+  }
+
+  function keepAndRedraw() {
+    const lands = hand.filter(isLand).length;
+    const spells = hand.length - lands;
+    setHandHistory((prev) => [...prev, { lands, spells }]);
     setMulliganCount(0);
-  }
-
-  // Draw initial hand on mount
-  if (!hand && !loading && !error) {
     drawHand();
   }
+
+  useEffect(() => {
+    drawHand();
+  }, []);
+
+  const landCount = hand.filter(isLand).length;
+  const spellCount = hand.length - landCount;
+  const totalHands = handHistory.length;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm" onClick={onClose}>
       <div className="panel p-6 w-full max-w-4xl mx-4 max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
-        {/* Header */}
         <div className="flex items-center justify-between mb-4">
           <div>
             <div className="text-xs text-text-muted font-medium uppercase tracking-wider">
               Opening Hand Simulator
             </div>
             {mulliganCount > 0 && (
-              <div className="text-xxs text-text-muted mt-0.5">
+              <div className="text-xxs text-accent-yellow mt-0.5">
                 mulligan #{mulliganCount} — drawing {7 - mulliganCount} cards
               </div>
             )}
@@ -124,96 +118,91 @@ export default function HandSimulator({ deckId, onClose }: Props) {
           </button>
         </div>
 
-        {/* Loading */}
-        {loading && (
-          <div className="text-center py-12">
-            <div className="text-text-muted text-sm">
-              <span className="text-accent-green">$</span> shuffling deck...
-              <span className="animate-pulse">█</span>
-            </div>
+        <div className="flex gap-2 overflow-x-auto pb-4 justify-center">
+          {hand.map((card, i) => (
+            <CardInHand
+              key={`${card.scryfall_id}-${i}`}
+              name={card.card_name}
+              scryfallId={card.scryfall_id}
+            />
+          ))}
+        </div>
+
+        <div className="flex items-center justify-center gap-6 my-4 text-sm">
+          <div className="flex items-center gap-1.5">
+            <span className="text-accent-green">●</span>
+            <span className="text-text-secondary">
+              {landCount} land{landCount !== 1 ? "s" : ""}
+            </span>
           </div>
-        )}
-
-        {/* Error */}
-        {error && (
-          <div className="mb-4 px-3 py-2 bg-accent-red/10 border border-accent-red/30 rounded text-accent-red text-sm">
-            {error}
+          <div className="flex items-center gap-1.5">
+            <span className="text-accent-blue">●</span>
+            <span className="text-text-secondary">
+              {spellCount} spell{spellCount !== 1 ? "s" : ""}
+            </span>
           </div>
-        )}
+          <div className="text-text-muted text-xs">
+            {hand.length} cards drawn
+          </div>
+        </div>
 
-        {/* Hand display */}
-        {hand && !loading && (
-          <>
-            <div className="flex gap-2 overflow-x-auto pb-4 justify-center">
-              {hand.hand.map((cardName, i) => (
-                <CardInHand
-                  key={`${cardName}-${i}`}
-                  name={cardName}
-                  scryfallId={cardLookup[cardName]}
-                />
-              ))}
-            </div>
+        <div className="flex gap-3 justify-center mb-4">
+          <button
+            onClick={mulligan}
+            disabled={mulliganCount >= 6}
+            className="btn-danger"
+          >
+            mulligan ({Math.max(7 - mulliganCount - 1, 0)} cards)
+          </button>
+          <button onClick={keepAndRedraw} className="btn-primary">
+            keep — draw new hand
+          </button>
+        </div>
 
-            {/* Hand stats */}
-            <div className="flex items-center justify-center gap-6 my-4 text-sm">
-              <div className="flex items-center gap-1.5">
-                <span className="text-accent-green">●</span>
-                <span className="text-text-secondary">
-                  {hand.land_count} land{hand.land_count !== 1 ? "s" : ""}
-                </span>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <span className="text-accent-blue">●</span>
-                <span className="text-text-secondary">
-                  {hand.nonland_count} spell{hand.nonland_count !== 1 ? "s" : ""}
-                </span>
-              </div>
-              <div className="text-text-muted text-xs">
-                {hand.hand.length} cards
-              </div>
-            </div>
-
-            {/* Action buttons */}
-            <div className="flex gap-3 justify-center mb-4">
-              <button
-                onClick={mulligan}
-                disabled={mulliganCount >= 6 || loading}
-                className="btn-danger"
-              >
-                mulligan ({7 - mulliganCount - 1} cards)
-              </button>
-              <button onClick={keepHand} className="btn-primary">
-                keep — draw new
-              </button>
-            </div>
-          </>
-        )}
-
-        {/* Probability stats */}
-        {stats && (
+        {totalHands > 0 && (
           <div className="border-t border-border pt-4">
             <div className="text-xxs text-text-muted font-medium uppercase tracking-wider mb-2">
-              Land Probability (1000 hands)
+              Session Stats ({totalHands} hand{totalHands !== 1 ? "s" : ""} kept)
             </div>
-            <div className="grid grid-cols-4 sm:grid-cols-8 gap-2">
-              {Object.entries(stats.land_distribution)
-                .sort(([a], [b]) => Number(a) - Number(b))
-                .map(([lands, pct]) => (
-                  <div key={lands} className="text-center">
-                    <div className="text-lg font-bold text-text-primary">{lands}</div>
-                    <div className="text-xxs text-text-muted">lands</div>
-                    <div className={`text-xs font-medium mt-0.5 ${
-                      Number(lands) >= 2 && Number(lands) <= 4
-                        ? "text-accent-green"
-                        : "text-text-secondary"
-                    }`}>
-                      {typeof pct === "number" ? pct.toFixed(1) : pct}%
+            <div className="grid grid-cols-3 gap-4 text-center">
+              <div>
+                <div className="text-lg font-bold text-accent-green">
+                  {(handHistory.reduce((sum, h) => sum + h.lands, 0) / totalHands).toFixed(1)}
+                </div>
+                <div className="text-xxs text-text-muted">avg lands</div>
+              </div>
+              <div>
+                <div className="text-lg font-bold text-accent-blue">
+                  {(handHistory.reduce((sum, h) => sum + h.spells, 0) / totalHands).toFixed(1)}
+                </div>
+                <div className="text-xxs text-text-muted">avg spells</div>
+              </div>
+              <div>
+                <div className="text-lg font-bold text-text-primary">{totalHands}</div>
+                <div className="text-xxs text-text-muted">hands drawn</div>
+              </div>
+            </div>
+
+            <div className="mt-3">
+              <div className="text-xxs text-text-muted text-center mb-1">
+                % of hands with N lands (2-4 is ideal)
+              </div>
+              <div className="flex gap-2 justify-center">
+                {[0, 1, 2, 3, 4, 5, 6, 7].map((n) => {
+                  const count = handHistory.filter((h) => h.lands === n).length;
+                  const pct = ((count / totalHands) * 100).toFixed(0);
+                  return (
+                    <div key={n} className="text-center">
+                      <div className={`text-xs font-medium ${
+                        n >= 2 && n <= 4 ? "text-accent-green" : n === 0 || n >= 6 ? "text-accent-red" : "text-text-secondary"
+                      }`}>
+                        {pct}%
+                      </div>
+                      <div className="text-xxs text-text-muted">{n} lands</div>
                     </div>
-                  </div>
-                ))}
-            </div>
-            <div className="text-center mt-2 text-xs text-text-muted">
-              avg lands in opening hand: {stats.avg_lands.toFixed(2)}
+                  );
+                })}
+              </div>
             </div>
           </div>
         )}

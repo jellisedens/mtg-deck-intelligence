@@ -1,8 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import { simulateGame } from "@/lib/api";
 import GameSimChart, { type TurnData } from "./GameSimChart";
+
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8001";
 
 interface Props {
   deckId: string;
@@ -12,15 +13,32 @@ interface Props {
 interface SimConfig {
   games: number;
   turns: number;
+  minLands: number;
+  maxLands: number;
 }
 
 interface SimResult {
   per_turn_averages: TurnData[];
   games_simulated: number;
+  opening_hand_stats?: {
+    mulligan_rate: number;
+    avg_types: Record<string, number>;
+    pct_has_ramp: number;
+    pct_has_draw: number;
+  };
+  mulligan_settings?: {
+    min_lands: number;
+    max_lands: number;
+  };
 }
 
 export default function GameSimulator({ deckId, onClose }: Props) {
-  const [config, setConfig] = useState<SimConfig>({ games: 500, turns: 10 });
+  const [config, setConfig] = useState<SimConfig>({
+    games: 500,
+    turns: 10,
+    minLands: 2,
+    maxLands: 5,
+  });
   const [result, setResult] = useState<SimResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [elapsed, setElapsed] = useState(0);
@@ -36,10 +54,33 @@ export default function GameSimulator({ deckId, onClose }: Props) {
     }, 1000);
 
     try {
-      const data = await simulateGame(deckId, config.games);
+      const token = typeof window !== "undefined" ? localStorage.getItem("mtg_token") : null;
+      const params = new URLSearchParams({
+        n_games: String(config.games),
+        turns: String(config.turns),
+        min_lands: String(config.minLands),
+        max_lands: String(config.maxLands),
+      });
+
+      const res = await fetch(`${API_BASE}/decks/${deckId}/simulate/game?${params}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+      });
+
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail || `Simulation failed: ${res.status}`);
+      }
+
+      const data = await res.json();
       setResult({
         per_turn_averages: (data.per_turn_averages || []) as TurnData[],
-        games_simulated: (data.games_simulated || config.games) as number,
+        games_simulated: data.games_simulated || config.games,
+        opening_hand_stats: data.opening_hand_stats,
+        mulligan_settings: data.mulligan_settings,
       });
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Simulation failed");
@@ -48,6 +89,8 @@ export default function GameSimulator({ deckId, onClose }: Props) {
       setLoading(false);
     }
   }
+
+  const ohs = result?.opening_hand_stats;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm" onClick={onClose}>
@@ -103,10 +146,55 @@ export default function GameSimulator({ deckId, onClose }: Props) {
               </div>
             </div>
 
+            {/* Mulligan conditions */}
+            <div>
+              <label className="block text-xs text-text-secondary mb-1.5">
+                mulligan conditions
+              </label>
+              <div className="text-xxs text-text-muted mb-2">
+                mulligan if opening hand has fewer than min or more than max lands
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xxs text-text-muted mb-1">
+                    min lands to keep
+                  </label>
+                  <select
+                    value={config.minLands}
+                    onChange={(e) => setConfig({ ...config, minLands: Number(e.target.value) })}
+                    className="input-terminal"
+                  >
+                    {[0, 1, 2, 3, 4].map((n) => (
+                      <option key={n} value={n}>
+                        {n} land{n !== 1 ? "s" : ""} {n === 2 ? "(default)" : ""}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xxs text-text-muted mb-1">
+                    max lands to keep
+                  </label>
+                  <select
+                    value={config.maxLands}
+                    onChange={(e) => setConfig({ ...config, maxLands: Number(e.target.value) })}
+                    className="input-terminal"
+                  >
+                    {[3, 4, 5, 6, 7].map((n) => (
+                      <option key={n} value={n}>
+                        {n} lands {n === 5 ? "(default)" : ""}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+            </div>
+
             <div className="text-xxs text-text-muted space-y-1">
-              <p>simulates drawing cards, playing lands, and casting spells each turn</p>
-              <p>tracks: mana development, board state, color access, castability</p>
-              <p>no combat or opponent interaction — pure deck consistency analysis</p>
+              <p>simulates full turns: draw, play land, cast spells in priority order</p>
+              <p>ramp spells resolve and accelerate mana, draw spells pull extra cards</p>
+              <p>does NOT simulate: combat damage triggers, attack triggers, opponent interaction</p>
+              <p>measures deck consistency — how reliably your engine starts up</p>
             </div>
 
             {error && (
@@ -139,16 +227,66 @@ export default function GameSimulator({ deckId, onClose }: Props) {
             <div className="bg-bg-primary border border-border rounded p-3">
               <div className="flex items-center justify-between text-sm">
                 <span className="text-text-secondary">
-                  {result.games_simulated} games simulated over {result.per_turn_averages.length} turns
+                  {result.games_simulated} games × {result.per_turn_averages.length} turns
                 </span>
                 <button
                   onClick={() => setResult(null)}
                   className="btn-ghost text-xs"
                 >
-                  configure new run
+                  new run
                 </button>
               </div>
             </div>
+
+            {/* Opening hand stats */}
+            {ohs && (
+              <div className="bg-bg-primary border border-border rounded p-3">
+                <div className="text-xxs text-text-muted font-medium uppercase tracking-wider mb-2">
+                  Opening Hand
+                </div>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-center">
+                  <div>
+                    <div className={`text-lg font-bold ${ohs.mulligan_rate <= 20 ? "text-accent-green" : ohs.mulligan_rate <= 30 ? "text-accent-yellow" : "text-accent-red"}`}>
+                      {ohs.mulligan_rate}%
+                    </div>
+                    <div className="text-xxs text-text-muted">mulligan rate</div>
+                  </div>
+                  <div>
+                    <div className="text-lg font-bold text-accent-green">
+                      {ohs.avg_types?.Land?.toFixed(1) || "0"}
+                    </div>
+                    <div className="text-xxs text-text-muted">avg lands</div>
+                  </div>
+                  <div>
+                    <div className={`text-lg font-bold ${ohs.pct_has_ramp >= 60 ? "text-accent-green" : ohs.pct_has_ramp >= 40 ? "text-accent-yellow" : "text-accent-red"}`}>
+                      {ohs.pct_has_ramp}%
+                    </div>
+                    <div className="text-xxs text-text-muted">has ramp</div>
+                  </div>
+                  <div>
+                    <div className={`text-lg font-bold ${ohs.pct_has_draw >= 40 ? "text-accent-green" : ohs.pct_has_draw >= 25 ? "text-accent-yellow" : "text-accent-red"}`}>
+                      {ohs.pct_has_draw}%
+                    </div>
+                    <div className="text-xxs text-text-muted">has draw</div>
+                  </div>
+                </div>
+                <div className="mt-2 pt-2 border-t border-border/50 flex flex-wrap gap-3 justify-center">
+                  {Object.entries(ohs.avg_types || {})
+                    .sort(([, a], [, b]) => b - a)
+                    .map(([type, avg]) => (
+                      <div key={type} className="text-center">
+                        <div className="text-xs text-text-primary">{avg.toFixed(1)}</div>
+                        <div className="text-xxs text-text-muted">{type}</div>
+                      </div>
+                    ))}
+                </div>
+                {result.mulligan_settings && (
+                  <div className="mt-2 text-xxs text-text-muted text-center">
+                    mulligan if lands &lt; {result.mulligan_settings.min_lands} or &gt; {result.mulligan_settings.max_lands}
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* Key insights at a glance */}
             {result.per_turn_averages.length >= 5 && (

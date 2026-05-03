@@ -1,7 +1,7 @@
 """
 Goldfish game state simulator.
 Simulates turns 1-10 with no opponent interaction.
-Tracks mana development, board state, and castability.
+Tracks mana development, board state, castability, and card composition.
 """
 
 import random
@@ -17,6 +17,53 @@ def _safe_int(value, default=1):
         return int(value)
     except (ValueError, TypeError):
         return default
+
+
+def _get_card_types(card):
+    """Extract card types from type_line."""
+    type_line = card.get("type_line", "")
+    types = []
+    if "Creature" in type_line:
+        types.append("Creature")
+    if "Instant" in type_line:
+        types.append("Instant")
+    if "Sorcery" in type_line:
+        types.append("Sorcery")
+    if "Enchantment" in type_line:
+        types.append("Enchantment")
+    if "Artifact" in type_line:
+        types.append("Artifact")
+    if "Planeswalker" in type_line:
+        types.append("Planeswalker")
+    if card.get("sim_tags", {}).get("is_land"):
+        types.append("Land")
+    return types
+
+
+def _is_ramp_card(card):
+    """Check if a card is a ramp piece based on sim_tags."""
+    tags = card.get("sim_tags", {})
+    if tags.get("mana_production") and not tags.get("is_land"):
+        return True
+    for action in tags.get("on_resolve", []):
+        if action.get("action") == "search_land":
+            return True
+    for action in tags.get("on_etb", []):
+        if action.get("action") == "search_land":
+            return True
+    return False
+
+
+def _is_draw_card(card):
+    """Check if a card draws cards based on sim_tags."""
+    tags = card.get("sim_tags", {})
+    for action in tags.get("on_resolve", []) + tags.get("on_etb", []):
+        if action.get("action") == "draw":
+            return True
+    for effect in tags.get("static_effects", []):
+        if "draw" in effect.get("effect", ""):
+            return True
+    return False
 
 
 class GameState:
@@ -158,12 +205,10 @@ class GameState:
 
         for color, needed in colors_needed.items():
             needed = _safe_int(needed)
-            # Count dedicated sources for this color
             dedicated = sources.get(color, 0)
             if dedicated >= needed:
                 continue
 
-            # Check if "any color" sources can fill the gap
             any_count = 0
             for land in self.battlefield_lands:
                 prod = land.get("sim_tags", {}).get("mana_production", {})
@@ -192,7 +237,8 @@ class GameState:
         return total
 
 
-def simulate_game(deck_cards: list, sim_tags: dict, turns: int = 10) -> dict:
+def simulate_game(deck_cards: list, sim_tags: dict, turns: int = 10,
+                  min_lands: int = 2, max_lands: int = 5) -> dict:
     """
     Simulate a single goldfish game.
 
@@ -200,9 +246,11 @@ def simulate_game(deck_cards: list, sim_tags: dict, turns: int = 10) -> dict:
         deck_cards: list of card dicts with card_data and quantity
         sim_tags: dict of card_name (lowercase) -> sim_tags
         turns: number of turns to simulate
+        min_lands: minimum lands in opening hand before mulligan
+        max_lands: maximum lands in opening hand before mulligan
 
     Returns:
-        dict with per-turn state snapshots
+        dict with per-turn state snapshots and card composition tracking
     """
     # Build the deck
     library = []
@@ -223,16 +271,32 @@ def simulate_game(deck_cards: list, sim_tags: dict, turns: int = 10) -> dict:
         if state.library:
             state.hand.append(state.library.pop(0))
 
-    # Evaluate mulligan
+    # Evaluate mulligan with configurable land thresholds
     lands_in_hand = sum(1 for c in state.hand if c.get("sim_tags", {}).get("is_land"))
-    if lands_in_hand < 2 or lands_in_hand > 5:
-        # Mulligan: reshuffle and draw 6
+    mulliganed = False
+    if lands_in_hand < min_lands or lands_in_hand > max_lands:
         state.library.extend(state.hand)
         state.hand = []
         random.shuffle(state.library)
         for _ in range(6):
             if state.library:
                 state.hand.append(state.library.pop(0))
+        mulliganed = True
+
+    # Track all cards seen cumulatively
+    cards_seen = list(state.hand)
+
+    # Opening hand composition
+    opening_hand_types = defaultdict(int)
+    opening_hand_has_ramp = False
+    opening_hand_has_draw = False
+    for c in state.hand:
+        for t in _get_card_types(c):
+            opening_hand_types[t] += 1
+        if _is_ramp_card(c):
+            opening_hand_has_ramp = True
+        if _is_draw_card(c):
+            opening_hand_has_draw = True
 
     turn_snapshots = []
 
@@ -248,11 +312,14 @@ def simulate_game(deck_cards: list, sim_tags: dict, turns: int = 10) -> dict:
                 state.max_land_drops += _safe_int(effect.get("count", 1))
 
         # DRAW (skip turn 1)
+        drawn_this_turn = None
         if turn_num > 1 and state.library:
             drawn = state.library.pop(0)
             state.hand.append(drawn)
+            cards_seen.append(drawn)
+            drawn_this_turn = drawn
 
-        # Record pre-cast castability (before we cast spells and empty the hand)
+        # Record pre-cast castability
         pre_cast_castable = sum(1 for c in state.hand
                                 if not c.get("sim_tags", {}).get("is_land") and state.can_cast(c))
 
@@ -265,6 +332,18 @@ def simulate_game(deck_cards: list, sim_tags: dict, turns: int = 10) -> dict:
 
         # CAST SPELLS in priority order
         _cast_spells(state)
+
+        # Cumulative card composition tracking
+        cumulative_types = defaultdict(int)
+        cumulative_ramp = 0
+        cumulative_draw = 0
+        for c in cards_seen:
+            for t in _get_card_types(c):
+                cumulative_types[t] += 1
+            if _is_ramp_card(c):
+                cumulative_ramp += 1
+            if _is_draw_card(c):
+                cumulative_draw += 1
 
         # Record snapshot
         snapshot = {
@@ -284,11 +363,26 @@ def simulate_game(deck_cards: list, sim_tags: dict, turns: int = 10) -> dict:
                                    if not c.get("sim_tags", {}).get("is_land") and not state.can_cast(c)),
             "cards_stuck_in_hand": sum(1 for c in state.hand
                                        if not c.get("sim_tags", {}).get("is_land")),
+            "cumulative_types_seen": dict(cumulative_types),
+            "cumulative_ramp_seen": cumulative_ramp,
+            "cumulative_draw_seen": cumulative_draw,
+            "total_cards_seen": len(cards_seen),
+            "draw_types": {t: True for t in _get_card_types(drawn_this_turn)} if drawn_this_turn else {},
+            "draw_is_ramp": _is_ramp_card(drawn_this_turn) if drawn_this_turn else False,
+            "draw_is_draw": _is_draw_card(drawn_this_turn) if drawn_this_turn else False,
         }
         turn_snapshots.append(snapshot)
 
     return {
         "turns": turn_snapshots,
+        "mulliganed": mulliganed,
+        "opening_hand": {
+            "types": dict(opening_hand_types),
+            "has_ramp": opening_hand_has_ramp,
+            "has_draw": opening_hand_has_draw,
+            "land_count": opening_hand_types.get("Land", 0),
+            "size": len(state.hand) if mulliganed else 7,
+        },
         "final_state": {
             "lands": len(state.battlefield_lands),
             "permanents": len(state.battlefield_permanents),
@@ -498,39 +592,45 @@ def _execute_action(state: GameState, action: dict):
                 state.library.append(card)
 
     elif act == "deal_damage":
-        # Tracked but no opponent in goldfish
         pass
 
     elif act == "add_mana":
-        # Tracked but mana pool management is simplified
         pass
 
     elif act == "destroy" or act == "exile":
-        # No opponent permanents in goldfish
         pass
 
 
-def run_simulation(deck_cards: list, sim_tags: dict,
-                   n_games: int = 100, turns: int = 10) -> dict:
+def run_simulation(deck_cards, sim_tags, n_games=100, turns=10, min_lands=2, max_lands=5):
     """
     Run N goldfish games and aggregate results.
-
-    Returns averaged statistics per turn across all games.
+    Returns averaged statistics per turn across all games,
+    plus card composition tracking and opening hand analysis.
     """
     all_games = []
     for _ in range(n_games):
-        game = simulate_game(deck_cards, sim_tags, turns)
+        game = simulate_game(deck_cards, sim_tags, turns, min_lands, max_lands)
         all_games.append(game)
 
-    # Aggregate per-turn statistics
     n = len(all_games)
     aggregated_turns = []
+
+    # Track card types seen: per type, what % of games have seen at least one by each turn
+    card_types = ["Creature", "Instant", "Sorcery", "Enchantment", "Artifact", "Planeswalker", "Land"]
 
     for turn_idx in range(turns):
         turn_stats = defaultdict(float)
         on_curve_count = 0
         all_colors_count = 0
         color_totals = defaultdict(float)
+
+        # Card composition aggregation
+        type_seen_counts = defaultdict(int)  # games where at least 1 of this type seen
+        type_total_counts = defaultdict(float)  # total count across games
+        ramp_seen_total = 0
+        draw_seen_total = 0
+        ramp_at_least_one = 0
+        draw_at_least_one = 0
 
         for game in all_games:
             if turn_idx < len(game["turns"]):
@@ -542,23 +642,49 @@ def run_simulation(deck_cards: list, sim_tags: dict,
                         for color, count in value.items():
                             color_totals[color] += count
                         continue
+                    if key in ("cumulative_types_seen", "cumulative_ramp_seen",
+                               "cumulative_draw_seen", "total_cards_seen",
+                               "draw_types", "draw_is_ramp", "draw_is_draw"):
+                        continue
                     turn_stats[key] += value
 
-                # On curve: cast at least one spell this turn
                 if snapshot.get("spells_cast", 0) > 0:
                     on_curve_count += 1
 
-                # All colors available
                 sources = snapshot.get("color_sources", {})
                 if all(sources.get(c, 0) > 0 for c in ["W", "U", "B", "R", "G"]):
                     all_colors_count += 1
+
+                # Card composition tracking
+                types_seen = snapshot.get("cumulative_types_seen", {})
+                for card_type in card_types:
+                    count = types_seen.get(card_type, 0)
+                    type_total_counts[card_type] += count
+                    if count > 0:
+                        type_seen_counts[card_type] += 1
+
+                # Per-turn draw tracking (what was drawn THIS turn)
+                draw_types_this = snapshot.get("draw_types", {})
+                for card_type in card_types:
+                    if draw_types_this.get(card_type):
+                        if f"draw_{card_type}" not in turn_stats:
+                            turn_stats[f"draw_{card_type}"] = 0
+                        turn_stats[f"draw_{card_type}"] += 1        
+
+                ramp_count = snapshot.get("cumulative_ramp_seen", 0)
+                draw_count = snapshot.get("cumulative_draw_seen", 0)
+                ramp_seen_total += ramp_count
+                draw_seen_total += draw_count
+                if ramp_count > 0:
+                    ramp_at_least_one += 1
+                if draw_count > 0:
+                    draw_at_least_one += 1
 
         # Average the stats
         averaged = {"turn": turn_idx + 1}
         for key, total in turn_stats.items():
             averaged[f"avg_{key}"] = round(total / n, 2)
 
-        # Average color sources per turn
         averaged["avg_color_sources"] = {}
         for color in ["W", "U", "B", "R", "G", "C"]:
             if color in color_totals:
@@ -567,7 +693,6 @@ def run_simulation(deck_cards: list, sim_tags: dict,
         averaged["on_curve_rate"] = round(on_curve_count / n * 100, 1)
         averaged["all_colors_rate"] = round(all_colors_count / n * 100, 1)
 
-        # Per-color access rates (what % of games have at least 1 source of each color)
         color_access = {}
         for color in ["W", "U", "B", "R", "G"]:
             has_color = 0
@@ -579,7 +704,6 @@ def run_simulation(deck_cards: list, sim_tags: dict,
             color_access[color] = round(has_color / n * 100, 1)
         averaged["color_access_rates"] = color_access
 
-        # Mana surplus/deficit
         mana_deficit_count = 0
         for game in all_games:
             if turn_idx < len(game["turns"]):
@@ -588,10 +712,59 @@ def run_simulation(deck_cards: list, sim_tags: dict,
                     mana_deficit_count += 1
         averaged["mana_on_curve_rate"] = round((n - mana_deficit_count) / n * 100, 1)
 
+        # Card composition stats for this turn
+        composition = {}
+        for card_type in card_types:
+            composition[card_type] = {
+                "avg_seen": round(type_total_counts[card_type] / n, 2),
+                "pct_at_least_one": round(type_seen_counts[card_type] / n * 100, 1),
+            }
+        composition["Ramp"] = {
+            "avg_seen": round(ramp_seen_total / n, 2),
+            "pct_at_least_one": round(ramp_at_least_one / n * 100, 1),
+        }
+        composition["Card Draw"] = {
+            "avg_seen": round(draw_seen_total / n, 2),
+            "pct_at_least_one": round(draw_at_least_one / n * 100, 1),
+        }
+        averaged["card_composition"] = composition
+
+        # What was drawn this specific turn (% chance of drawing each type)
+        draw_rates = {}
+        for card_type in card_types:
+            key = f"draw_{card_type}"
+            count = turn_stats.get(key, 0)
+            draw_rates[card_type] = round(count / n * 100, 1)
+        averaged["draw_rate_this_turn"] = draw_rates
+
         aggregated_turns.append(averaged)
+
+    # Opening hand aggregation
+    mulligan_count = sum(1 for g in all_games if g.get("mulliganed", False))
+    opening_type_totals = defaultdict(float)
+    opening_ramp_count = 0
+    opening_draw_count = 0
+
+    for game in all_games:
+        oh = game.get("opening_hand", {})
+        for t, count in oh.get("types", {}).items():
+            opening_type_totals[t] += count
+        if oh.get("has_ramp"):
+            opening_ramp_count += 1
+        if oh.get("has_draw"):
+            opening_draw_count += 1
+
+    opening_hand_stats = {
+        "mulligan_rate": round(mulligan_count / n * 100, 1),
+        "avg_types": {t: round(v / n, 2) for t, v in opening_type_totals.items()},
+        "pct_has_ramp": round(opening_ramp_count / n * 100, 1),
+        "pct_has_draw": round(opening_draw_count / n * 100, 1),
+    }
 
     return {
         "games_simulated": n,
         "turns_per_game": turns,
+        "mulligan_settings": {"min_lands": min_lands, "max_lands": max_lands},
+        "opening_hand_stats": opening_hand_stats,
         "per_turn_averages": aggregated_turns,
     }

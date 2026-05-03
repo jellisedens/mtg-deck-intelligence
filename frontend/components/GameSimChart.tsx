@@ -35,6 +35,8 @@ export interface TurnData {
   all_colors_rate: number;
   color_access_rates: Record<string, number>;
   mana_on_curve_rate: number;
+  card_composition?: Record<string, { avg_seen: number; pct_at_least_one: number }>;
+  draw_rate_this_turn?: Record<string, number>;
 }
 
 interface Props {
@@ -42,7 +44,7 @@ interface Props {
   gamesSimulated: number;
 }
 
-type Tab = "overview" | "mana" | "board" | "colors" | "chart";
+type Tab = "overview" | "mana" | "colors" | "draws" | "chart";
 
 function grade(value: number, good: number, ok: number): string {
   if (value >= good) return "text-accent-green";
@@ -153,11 +155,13 @@ function ManaTab({ turnData }: { turnData: TurnData[] }) {
         <thead>
           <tr className="text-text-muted border-b border-border">
             <th className="text-left py-1.5 pr-2 font-medium">turn</th>
-            <th className="text-right py-1.5 px-2 font-medium" title="Average lands on the battlefield">lands</th>
-            <th className="text-right py-1.5 px-2 font-medium" title="Total mana available including rocks and ramp">mana</th>
-            <th className="text-right py-1.5 px-2 font-medium" title="Extra mana beyond land count — shows how much your ramp adds">ramp+</th>
-            <th className="text-right py-1.5 px-2 font-medium" title="% of games where total mana meets or exceeds the turn number">on curve</th>
-            <th className="text-right py-1.5 pl-2 font-medium" title="Average spells you can cast after playing a land">castable</th>
+            <th className="text-right py-1.5 px-1 font-medium" title="Average lands on the battlefield">lands</th>
+            <th className="text-right py-1.5 px-1 font-medium" title="Total mana available including rocks and ramp">mana</th>
+            <th className="text-right py-1.5 px-1 font-medium" title="Extra mana beyond land count from ramp">ramp+</th>
+            <th className="text-right py-1.5 px-1 font-medium" title="% of games where total mana meets or exceeds the turn number">curve</th>
+            <th className="text-right py-1.5 px-1 font-medium" title="Spells cast this turn">cast</th>
+            <th className="text-right py-1.5 px-1 font-medium" title="Cards remaining in hand">hand</th>
+            <th className="text-right py-1.5 pl-1 font-medium" title="Cards in hand you can't cast — too expensive or wrong colors">stuck</th>
           </tr>
         </thead>
         <tbody>
@@ -166,15 +170,19 @@ function ManaTab({ turnData }: { turnData: TurnData[] }) {
             return (
               <tr key={t.turn} className="border-b border-border/50 hover:bg-bg-hover transition-colors">
                 <td className="py-1.5 pr-2 text-text-secondary">T{t.turn}</td>
-                <td className="py-1.5 px-2 text-right text-accent-green">{t.avg_lands_on_board.toFixed(1)}</td>
-                <td className="py-1.5 px-2 text-right text-accent-blue">{t.avg_total_mana_available.toFixed(1)}</td>
-                <td className={`py-1.5 px-2 text-right ${rampBonus >= 1 ? "text-accent-green" : "text-text-muted"}`}>
+                <td className="py-1.5 px-1 text-right text-accent-green">{t.avg_lands_on_board.toFixed(1)}</td>
+                <td className="py-1.5 px-1 text-right text-accent-blue">{t.avg_total_mana_available.toFixed(1)}</td>
+                <td className={`py-1.5 px-1 text-right ${rampBonus >= 1 ? "text-accent-green" : "text-text-muted"}`}>
                   +{rampBonus.toFixed(1)}
                 </td>
-                <td className={`py-1.5 px-2 text-right ${grade(t.mana_on_curve_rate, 80, 60)}`}>
+                <td className={`py-1.5 px-1 text-right ${grade(t.mana_on_curve_rate, 80, 60)}`}>
                   {t.mana_on_curve_rate}%
                 </td>
-                <td className="py-1.5 pl-2 text-right text-text-primary">{t.avg_castable_after_land.toFixed(1)}</td>
+                <td className="py-1.5 px-1 text-right text-text-primary">{t.avg_spells_cast.toFixed(1)}</td>
+                <td className="py-1.5 px-1 text-right text-text-primary">{t.avg_cards_in_hand.toFixed(1)}</td>
+                <td className={`py-1.5 pl-1 text-right ${t.avg_uncastable_cards <= 1.5 ? "text-accent-green" : t.avg_uncastable_cards <= 3 ? "text-accent-yellow" : "text-accent-red"}`}>
+                  {t.avg_uncastable_cards.toFixed(1)}
+                </td>
               </tr>
             );
           })}
@@ -184,38 +192,7 @@ function ManaTab({ turnData }: { turnData: TurnData[] }) {
   );
 }
 
-function BoardTab({ turnData }: { turnData: TurnData[] }) {
-  return (
-    <div className="overflow-x-auto">
-      <table className="w-full text-xs">
-        <thead>
-          <tr className="text-text-muted border-b border-border">
-            <th className="text-left py-1.5 pr-2 font-medium">turn</th>
-            <th className="text-right py-1.5 px-2 font-medium" title="Average creatures on the battlefield">creatures</th>
-            <th className="text-right py-1.5 px-2 font-medium" title="Total power of creatures on board — your damage potential">power</th>
-            <th className="text-right py-1.5 px-2 font-medium" title="All non-land permanents on board (creatures, artifacts, enchantments)">permanents</th>
-            <th className="text-right py-1.5 px-2 font-medium" title="Cards remaining in hand">hand</th>
-            <th className="text-right py-1.5 pl-2 font-medium" title="Cards in hand you can't cast — too expensive or wrong colors">stuck</th>
-          </tr>
-        </thead>
-        <tbody>
-          {turnData.map((t) => (
-            <tr key={t.turn} className="border-b border-border/50 hover:bg-bg-hover transition-colors">
-              <td className="py-1.5 pr-2 text-text-secondary">T{t.turn}</td>
-              <td className="py-1.5 px-2 text-right text-accent-yellow">{t.avg_creatures_on_board.toFixed(1)}</td>
-              <td className="py-1.5 px-2 text-right text-accent-red">{t.avg_total_power_on_board.toFixed(1)}</td>
-              <td className="py-1.5 px-2 text-right text-text-primary">{t.avg_permanents_on_board.toFixed(1)}</td>
-              <td className="py-1.5 px-2 text-right text-text-primary">{t.avg_cards_in_hand.toFixed(1)}</td>
-              <td className={`py-1.5 pl-2 text-right ${grade(5 - t.avg_uncastable_cards, 3.5, 2)}`}>
-                {t.avg_uncastable_cards.toFixed(1)}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-}
+
 
 function ColorsTab({ turnData }: { turnData: TurnData[] }) {
   const colors = ["W", "U", "B", "R", "G"];
@@ -278,6 +255,121 @@ function ColorsTab({ turnData }: { turnData: TurnData[] }) {
   );
 }
 
+function DrawsTab({ turnData }: { turnData: TurnData[] }) {
+  const types = ["Creature", "Land", "Instant", "Sorcery", "Enchantment", "Artifact", "Ramp", "Card Draw"];
+  const filtered = turnData;
+
+  return (
+    <div className="space-y-4">
+      {/* Cumulative: what you've seen by each turn */}
+      <div>
+        <div className="text-xxs text-text-muted mb-1" title="Average number of each type seen across all cards drawn by this turn">
+          cumulative — avg seen by turn
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="text-text-muted border-b border-border">
+                <th className="text-left py-1.5 pr-2 font-medium">type</th>
+                {filtered.map((t) => (
+                  <th key={t.turn} className="text-right py-1.5 px-1 font-medium">T{t.turn}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {types.map((type) => (
+                <tr key={type} className="border-b border-border/50 hover:bg-bg-hover transition-colors">
+                  <td className="py-1.5 pr-2 text-text-secondary">{type}</td>
+                  {filtered.map((t) => {
+                    const comp = t.card_composition;
+                    const data = comp?.[type];
+                    return (
+                      <td key={t.turn} className="py-1.5 px-1 text-right text-text-primary">
+                        {data ? data.avg_seen.toFixed(1) : "—"}
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Probability of seeing at least one */}
+      <div>
+        <div className="text-xxs text-text-muted mb-1" title="% of games where at least one of this type was drawn by this turn">
+          probability — % with at least one by turn
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="text-text-muted border-b border-border">
+                <th className="text-left py-1.5 pr-2 font-medium">type</th>
+                {filtered.map((t) => (
+                  <th key={t.turn} className="text-right py-1.5 px-1 font-medium">T{t.turn}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {types.map((type) => (
+                <tr key={type} className="border-b border-border/50 hover:bg-bg-hover transition-colors">
+                  <td className="py-1.5 pr-2 text-text-secondary">{type}</td>
+                  {filtered.map((t) => {
+                    const comp = t.card_composition;
+                    const data = comp?.[type];
+                    const pct = data?.pct_at_least_one || 0;
+                    return (
+                      <td key={t.turn} className={`py-1.5 px-1 text-right ${grade(pct, 80, 50)}`}>
+                        {pct.toFixed(0)}%
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Per-turn draw rate */}
+      <div>
+        <div className="text-xxs text-text-muted mb-1" title="% chance that the card drawn on this specific turn is this type">
+          per-turn draw — % chance this turn's draw is...
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="text-text-muted border-b border-border">
+                <th className="text-left py-1.5 pr-2 font-medium">type</th>
+                {filtered.map((t) => (
+                  <th key={t.turn} className="text-right py-1.5 px-1 font-medium">T{t.turn}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {["Creature", "Land", "Instant", "Sorcery", "Enchantment", "Artifact", "Planeswalker"].map((type) => (
+                <tr key={type} className="border-b border-border/50 hover:bg-bg-hover transition-colors">
+                  <td className="py-1.5 pr-2 text-text-secondary">{type}</td>
+                  {filtered.map((t) => {
+                    const rates = t.draw_rate_this_turn;
+                    const rate = rates?.[type] || 0;
+                    return (
+                      <td key={t.turn} className={`py-1.5 px-1 text-right ${rate > 0 ? "text-text-primary" : "text-text-muted"}`}>
+                        {rate > 0 ? `${rate}%` : "—"}
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ChartView({ turnData }: { turnData: TurnData[] }) {
   const data = turnData.map((t) => ({
     turn: `T${t.turn}`,
@@ -309,8 +401,8 @@ export default function GameSimChart({ turnData, gamesSimulated }: Props) {
   const tabs: { key: Tab; label: string }[] = [
     { key: "overview", label: "insights" },
     { key: "mana", label: "mana" },
-    { key: "board", label: "board" },
     { key: "colors", label: "colors" },
+    { key: "draws", label: "draws" },
     { key: "chart", label: "chart" },
   ];
 
@@ -342,8 +434,8 @@ export default function GameSimChart({ turnData, gamesSimulated }: Props) {
 
       {tab === "overview" && <OverviewTab turnData={turnData} />}
       {tab === "mana" && <ManaTab turnData={turnData} />}
-      {tab === "board" && <BoardTab turnData={turnData} />}
       {tab === "colors" && <ColorsTab turnData={turnData} />}
+      {tab === "draws" && <DrawsTab turnData={turnData} />}
       {tab === "chart" && <ChartView turnData={turnData} />}
     </div>
   );

@@ -42,13 +42,29 @@ def _sse_message(data: dict) -> str:
 @router.get("/{deck_id}/strategy/stream")
 async def stream_strategy_generation(
     deck_id: UUID,
-    user: User = Depends(get_current_user),
+    token: str = None,
     db: Session = Depends(get_db),
 ):
     """
     Generate strategy profile with real-time progress updates via SSE.
     Connect with EventSource in the frontend to receive progress.
+    Uses query param token because EventSource cannot set Authorization headers.
     """
+    # Manual auth for SSE
+    from services.auth import decode_access_token
+    from models.user import User as UserModel
+
+    if not token:
+        raise HTTPException(status_code=401, detail="Token required")
+
+    payload = decode_access_token(token)
+    if not payload or "sub" not in payload:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    user = db.query(UserModel).filter(UserModel.id == payload["sub"]).first()
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
+
     deck = db.query(Deck).filter(Deck.id == deck_id).first()
     if not deck:
         raise HTTPException(status_code=404, detail="Deck not found")

@@ -9,7 +9,9 @@ import DeckAnalytics from "@/components/DeckAnalytics";
 import HandSimulator from "@/components/HandSimulator";
 import GameSimulator from "@/components/GameSimulator";
 import AISuggestPanel from "@/components/AISuggestPanel";
-import { getDeck, addCard, updateCard, removeCard } from "@/lib/api";
+import DeckPreferences from "@/components/DeckPreferences";
+import StrategyGenerator from "@/components/StrategyGenerator";
+import { getDeck, addCard, updateCard, removeCard, getStrategy } from "@/lib/api";
 import { useCardCache } from "@/lib/card-cache";
 import { Deck, ScryfallCard } from "@/lib/types";
 
@@ -22,6 +24,7 @@ function DeckBuilderContent({ deckId }: { deckId: string }) {
   const [actionError, setActionError] = useState("");
   const [showHandSim, setShowHandSim] = useState(false);
   const [showGameSim, setShowGameSim] = useState(false);
+  const [hasStrategy, setHasStrategy] = useState(false);
 
   const { cardDataMap, fetchCards, addCard: cacheCard, isLoading: cardsLoading } = useCardCache();
 
@@ -29,6 +32,10 @@ function DeckBuilderContent({ deckId }: { deckId: string }) {
     try {
       const data = await getDeck(deckId);
       setDeck(data);
+
+      // Check strategy profile
+      const strat = await getStrategy(deckId);
+      setHasStrategy(!!strat);
 
       if (data.cards && data.cards.length > 0) {
         const ids = data.cards.map((c) => c.scryfall_id);
@@ -222,6 +229,16 @@ function DeckBuilderContent({ deckId }: { deckId: string }) {
         </div>
 
         <div className="space-y-4">
+          <StrategyGenerator
+            deckId={deckId}
+            hasProfile={hasStrategy}
+            onComplete={() => window.location.reload()}
+          />
+          <DeckPreferences
+            deckId={deckId}
+            currentPreferences={deck.preferences as unknown as Record<string, string | null> | null}
+            onSaved={() => loadDeck()}
+          />
           <AISuggestPanel deckId={deckId} />
           <DeckAnalytics
             deckId={deckId}

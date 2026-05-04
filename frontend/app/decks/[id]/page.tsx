@@ -14,6 +14,7 @@ import StrategyGenerator from "@/components/StrategyGenerator";
 import { getDeck, addCard, updateCard, removeCard, getStrategy } from "@/lib/api";
 import { useCardCache } from "@/lib/card-cache";
 import { Deck, ScryfallCard } from "@/lib/types";
+import { usePathname} from "next/navigation";
 
 function DeckBuilderContent({ deckId }: { deckId: string }) {
   const router = useRouter();
@@ -264,19 +265,13 @@ function DeckBuilderContent({ deckId }: { deckId: string }) {
     </div>
   );
 }
+import { fromJSON } from "postcss";
 
 export default function DeckBuilderPage() {
-  const [deckId, setDeckId] = useState<string | null>(null);
+  const pathname = usePathname();
+  const deckId = pathname?.split("/").pop() || null;
 
-  useEffect(() => {
-    const pathParts = window.location.pathname.split("/");
-    const id = pathParts[pathParts.length - 1];
-    if (id && id !== "decks") {
-      setDeckId(id);
-    }
-  }, []);
-
-  if (!deckId) {
+  if (!deckId || deckId === "decks") {
     return (
       <ProtectedRoute>
         <div className="max-w-7xl mx-auto px-4 py-8">

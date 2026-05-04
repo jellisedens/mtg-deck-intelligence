@@ -5,6 +5,9 @@ Routes user prompts through intent classification to specialized prompt builders
 
 import os
 import json
+import time
+import asyncio
+import logging
 from openai import OpenAI
 from services.scryfall import scryfall_service
 from services.analytics import compute_analytics
@@ -20,13 +23,17 @@ from data.mtg_glossary import GLOSSARY, CLARIFICATIONS, REPLACEMENT_GUIDE, SYNER
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 MODEL = "gpt-4o-mini"
 
+logger = logging.getLogger(__name__)
+
 
 async def get_suggestions(prompt: str, deck_cards: list = None, deck_info: dict = None,
-                          simulation_data: dict = None) -> dict:
+                          simulation_data: dict = None, card_lookup: dict = None) -> dict:
     """
     Main entry point for AI suggestions.
     Classifies intent and routes to the appropriate prompt builder.
     """
+    t_start = time.time()
+
     # Check for clarification needs
     clarification = _check_for_clarification(prompt)
     if clarification:
@@ -35,17 +42,37 @@ async def get_suggestions(prompt: str, deck_cards: list = None, deck_info: dict 
     # Classify intent
     intent_result = classify_intent(prompt, has_deck=deck_cards is not None)
     intent = intent_result["intent"]
+    print(f"[AI] Intent: {intent} ({time.time() - t_start:.1f}s)")
 
+    print(f"[AI] card_lookup provided: {card_lookup is not None}, cards: {len(card_lookup) if card_lookup else 0}")
     # Build deck context data (needed for most intents)
+    t_ctx = time.time()
     analytics = None
     role_data = None
-    card_lookup = None
     if deck_cards:
-        analytics = await compute_analytics(deck_cards, include_card_data=True)
-        card_lookup = analytics.pop("_card_lookup", {})
-        role_data = classify_deck_roles(deck_cards, card_lookup, deck_info)
+        if card_lookup:
+            t_qa = time.time()
+            analytics = _build_quick_analytics(deck_cards, card_lookup)
+            print(f"[AI] Quick analytics ({time.time() - t_qa:.1f}s)")
+        else:
+            t_ca = time.time()
+            analytics = await compute_analytics(deck_cards, include_card_data=True)
+            card_lookup = analytics.pop("_card_lookup", {})
+            print(f"[AI] Full analytics ({time.time() - t_ca:.1f}s)")
+        t_roles = time.time()
+        # Use cached role data from strategy profile if available
+        profile = (deck_info or {}).get("strategy_profile") or {}
+        cached_roles = profile.get("role_data")
+        if cached_roles:
+            role_data = cached_roles
+            print(f"[AI] Role classification (cached) ({time.time() - t_roles:.1f}s)")
+        else:
+            role_data = classify_deck_roles(deck_cards, card_lookup, deck_info)
+            print(f"[AI] Role classification (computed) ({time.time() - t_roles:.1f}s)")
+    print(f"[AI] Context built ({time.time() - t_ctx:.1f}s)")
 
     # Route based on intent
+    t_route = time.time()
     if intent == INTENT_CUTS:
         result = await _handle_cuts(prompt, deck_info, simulation_data, deck_cards, card_lookup)
     elif intent == INTENT_ANALYZE:
@@ -60,6 +87,8 @@ async def get_suggestions(prompt: str, deck_cards: list = None, deck_info: dict 
             prompt, deck_cards, deck_info, simulation_data,
             card_lookup, role_data, analytics,
         )
+    print(f"[AI] Handler complete ({time.time() - t_route:.1f}s)")
+    print(f"[AI] Total: {time.time() - t_start:.1f}s")
 
     # Add debug info
     result.setdefault("debug", {})
@@ -67,6 +96,7 @@ async def get_suggestions(prompt: str, deck_cards: list = None, deck_info: dict 
     result["debug"]["intent_confidence"] = intent_result["confidence"]
     result["debug"]["intent_method"] = intent_result["method"]
     result["debug"]["simulation_informed"] = simulation_data is not None
+    result["debug"]["total_time_seconds"] = round(time.time() - t_start, 1)
 
     if role_data:
         result["debug"]["role_distribution"] = role_data.get("role_distribution", {})
@@ -80,6 +110,7 @@ async def _handle_suggest(prompt: str, deck_cards: list, deck_info: dict,
                           role_data: dict, analytics: dict) -> dict:
     """Handle card suggestion requests."""
     # Build search plan
+    t_plan = time.time()
     deck_context = None
     if deck_cards:
         deck_context = build_deck_context(deck_cards, deck_info, analytics, card_lookup, role_data)
@@ -87,6 +118,7 @@ async def _handle_suggest(prompt: str, deck_cards: list, deck_info: dict,
     plan = _get_ai_plan(prompt, deck_context)
     if "error" in plan:
         return plan
+    print(f"[AI] Search plan ({time.time() - t_plan:.1f}s)")
 
     # Execute searches
     existing_cards = set()
@@ -94,16 +126,20 @@ async def _handle_suggest(prompt: str, deck_cards: list, deck_info: dict,
         for card in deck_cards:
             existing_cards.add(card.card_name.lower())
 
+    t_search = time.time()
     search_results = await _execute_searches(
         queries=plan.get("scryfall_queries", []),
         exclude_cards=existing_cards,
     )
+    print(f"[AI] Search results: {len(search_results)} ({time.time() - t_search:.1f}s)")
 
-    if len(search_results) < 20:
+    if len(search_results) < 5:
+        t_broaden = time.time()
         search_results = await _broaden_search(prompt, plan, deck_context, search_results, existing_cards)
+        print(f"[AI] Broadened to {len(search_results)} ({time.time() - t_broaden:.1f}s)")
 
     # Build focused prompt
-    trimmed_results = search_results[:80]
+    trimmed_results = search_results[:30]
     system, user_msg = build_suggest_prompt(
         prompt=prompt,
         plan=plan,
@@ -115,7 +151,10 @@ async def _handle_suggest(prompt: str, deck_cards: list, deck_info: dict,
     )
 
     # Call AI and process
+    t_ai = time.time()
     result = _call_ai(system, user_msg)
+    print(f"[AI] Main AI call ({time.time() - t_ai:.1f}s)")
+
     result = _verify_suggestions(result, search_results)
     result.setdefault("debug", {})
     result["debug"]["scryfall_queries"] = plan.get("scryfall_queries", [])
@@ -127,6 +166,7 @@ async def _handle_suggest(prompt: str, deck_cards: list, deck_info: dict,
 async def _handle_cuts(prompt: str, deck_info: dict, simulation_data: dict,
                        deck_cards: list, card_lookup: dict) -> dict:
     """Handle cut recommendation requests."""
+    t_ai = time.time()
     system, user_msg = build_cuts_prompt(
         prompt=prompt,
         deck_info=deck_info,
@@ -136,6 +176,8 @@ async def _handle_cuts(prompt: str, deck_info: dict, simulation_data: dict,
     )
 
     result = _call_ai(system, user_msg)
+    print(f"[AI] Cuts AI call ({time.time() - t_ai:.1f}s)")
+
     result = _verify_cuts(result, deck_info)
     result.setdefault("suggestions", [])
     result.setdefault("debug", {})
@@ -145,6 +187,7 @@ async def _handle_cuts(prompt: str, deck_info: dict, simulation_data: dict,
 
 async def _handle_analyze(prompt: str, deck_info: dict, simulation_data: dict) -> dict:
     """Handle deck analysis requests."""
+    t_ai = time.time()
     system, user_msg = build_analyze_prompt(
         prompt=prompt,
         deck_info=deck_info,
@@ -152,6 +195,7 @@ async def _handle_analyze(prompt: str, deck_info: dict, simulation_data: dict) -
     )
 
     result = _call_ai(system, user_msg)
+    print(f"[AI] Analyze AI call ({time.time() - t_ai:.1f}s)")
 
     # Force empty arrays — analysis puts everything in strategy_notes
     result["suggestions"] = []
@@ -165,6 +209,7 @@ async def _handle_swap(prompt: str, deck_cards: list, deck_info: dict,
                        simulation_data: dict, card_lookup: dict,
                        role_data: dict, analytics: dict) -> dict:
     """Handle swap requests (cut + replace)."""
+    t_plan = time.time()
     deck_context = None
     if deck_cards:
         deck_context = build_deck_context(deck_cards, deck_info, analytics, card_lookup, role_data)
@@ -172,24 +217,27 @@ async def _handle_swap(prompt: str, deck_cards: list, deck_info: dict,
     plan = _get_ai_plan(prompt, deck_context)
     if "error" in plan:
         return plan
+    print(f"[AI] Swap plan ({time.time() - t_plan:.1f}s)")
 
     existing_cards = set()
     if deck_cards:
         for card in deck_cards:
             existing_cards.add(card.card_name.lower())
 
+    t_search = time.time()
     search_results = await _execute_searches(
         queries=plan.get("scryfall_queries", []),
         exclude_cards=existing_cards,
     )
+    print(f"[AI] Swap search: {len(search_results)} ({time.time() - t_search:.1f}s)")
 
-    if len(search_results) < 20:
+    if len(search_results) < 5:
         search_results = await _broaden_search(prompt, plan, deck_context, search_results, existing_cards)
 
     system, user_msg = build_swap_prompt(
         prompt=prompt,
         plan=plan,
-        search_results=search_results,
+        search_results=search_results[:30],
         deck_info=deck_info,
         simulation_data=simulation_data,
         deck_cards=deck_cards,
@@ -198,7 +246,10 @@ async def _handle_swap(prompt: str, deck_cards: list, deck_info: dict,
         strategic_context=STRATEGIC_CONTEXT,
     )
 
+    t_ai = time.time()
     result = _call_ai(system, user_msg)
+    print(f"[AI] Swap AI call ({time.time() - t_ai:.1f}s)")
+
     result = _verify_suggestions(result, search_results)
     result = _verify_cuts(result, deck_info)
     result.setdefault("debug", {})
@@ -373,16 +424,68 @@ Query rules:
     except Exception as e:
         return {"error": "ai_error", "details": str(e)}
 
+def _build_quick_analytics(deck_cards: list, card_lookup: dict) -> dict:
+    """Build lightweight analytics from pre-fetched card data. No Scryfall calls."""
+    from collections import defaultdict
+
+    mana_curve = defaultdict(int)
+    color_dist = defaultdict(int)
+    type_dist = defaultdict(int)
+    total_cmc = 0
+    nonland_count = 0
+    total_cards = 0
+
+    for deck_card in deck_cards:
+        card_data = card_lookup.get(deck_card.scryfall_id, {})
+        qty = deck_card.quantity
+        total_cards += qty
+
+        type_line = card_data.get("type_line", "")
+        cmc = card_data.get("cmc", 0)
+
+        # Type distribution
+        for t in ["Creature", "Instant", "Sorcery", "Enchantment", "Artifact", "Planeswalker", "Land"]:
+            if t in type_line:
+                type_dist[t] += qty
+
+        # Mana curve (nonlands only)
+        if "Land" not in type_line:
+            bucket = str(min(int(cmc), 7)) if int(cmc) < 7 else "7+"
+            mana_curve[bucket] += qty
+            total_cmc += cmc * qty
+            nonland_count += qty
+
+        # Color distribution
+        for symbol in card_data.get("mana_cost", ""):
+            if symbol in "WUBRG":
+                color_dist[symbol] += qty
+
+    color_names = {"W": "White", "U": "Blue", "B": "Black", "R": "Red", "G": "Green"}
+
+    return {
+        "total_cards": total_cards,
+        "mana_curve": dict(mana_curve),
+        "type_distribution": dict(type_dist),
+        "color_distribution": {c: {"name": color_names.get(c, c), "count": v} for c, v in color_dist.items()},
+        "average_cmc": round(total_cmc / nonland_count, 2) if nonland_count > 0 else 0,
+    }
 
 async def _execute_searches(queries: list, exclude_cards: set = None) -> list:
-    """Execute Scryfall searches, filter duplicates, sort by EDHREC rank."""
-    all_results = []
-    seen_ids = set()
+    """Execute Scryfall searches in parallel, filter duplicates, sort by EDHREC rank."""
     exclude = exclude_cards or set()
 
-    for query in queries:
-        result = await scryfall_service.search_cards_raw(query)
+    # Run all queries concurrently
+    t_start = time.time()
+    tasks = [scryfall_service.search_cards_raw(q) for q in queries]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    print(f"[AI] Scryfall searches ({len(queries)} queries) took {time.time() - t_start:.1f}s")
 
+    all_results = []
+    seen_ids = set()
+
+    for result in results:
+        if isinstance(result, Exception):
+            continue
         if "error" in result:
             continue
 
@@ -419,7 +522,7 @@ async def _execute_searches(queries: list, exclude_cards: set = None) -> list:
 async def _broaden_search(prompt: str, plan: dict, deck_context: str,
                           search_results: list, exclude_cards: set) -> list:
     """Broaden search when initial results are too few."""
-    system = """You are a Scryfall query expert. Previous search returned < 20 results.
+    system = """You are a Scryfall query expert. Previous search returned < 5 results.
 Generate 2-3 BROADER queries. Remove price/CMC filters, use fewer terms.
 Respond with ONLY valid JSON: {"scryfall_queries": ["query1", "query2"]}"""
 

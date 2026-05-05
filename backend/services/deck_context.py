@@ -53,7 +53,7 @@ def build_deck_context(deck_cards: list, deck_info: dict, analytics: dict,
     role_lookup = {}
     if role_data:
         for cr in role_data.get("card_roles", []):
-            role_lookup[cr["name"].lower()] = cr
+            role_lookup[cr.get("name", cr.get("card_name", "")).lower()] = cr
 
     for card in deck_cards:
         role_info = role_lookup.get(card.card_name.lower(), {})

@@ -7,6 +7,7 @@ interface Props {
   deckId: string;
   hasProfile: boolean;
   onComplete: () => void;
+  cardCount?: number;
 }
 
 interface ProgressStep {
@@ -15,7 +16,7 @@ interface ProgressStep {
   message: string;
 }
 
-export default function StrategyGenerator({ deckId, hasProfile, onComplete }: Props) {
+export default function StrategyGenerator({ deckId, hasProfile, onComplete, cardCount }: Props) {
   const [generating, setGenerating] = useState(false);
   const [progress, setProgress] = useState<ProgressStep | null>(null);
   const [error, setError] = useState("");
@@ -28,7 +29,7 @@ export default function StrategyGenerator({ deckId, hasProfile, onComplete }: Pr
         if (data) setProfile(data);
       });
     }
-  }, [hasProfile, deckId]);
+  }, [hasProfile, deckId, cardCount]);
 
   function handleGenerate() {
     setGenerating(true);
@@ -51,6 +52,9 @@ export default function StrategyGenerator({ deckId, hasProfile, onComplete }: Pr
     );
   }
 
+  const isStale = Boolean(profile?.simulation_stale);
+  const changedCount = Number(profile?.cards_changed_since_regen || 0);
+
   const strategy = profile?.primary_strategy as string | undefined;
   const commanderRole = profile?.commander_role as string | undefined;
   const winConditions = profile?.win_conditions as string[] | undefined;
@@ -71,7 +75,13 @@ export default function StrategyGenerator({ deckId, hasProfile, onComplete }: Pr
             Strategy Profile
           </span>
           {hasProfile && !generating && (
-            <span className="text-xxs text-accent-green">generated</span>
+            isStale ? (
+              <span className="text-xxs text-accent-yellow">
+                stale ({changedCount} change{changedCount !== 1 ? "s" : ""})
+              </span>
+            ) : (
+              <span className="text-xxs text-accent-green">generated</span>
+            )
           )}
         </div>
         <span className="text-text-muted text-xs">{expanded ? "▲" : "▼"}</span>
@@ -86,11 +96,21 @@ export default function StrategyGenerator({ deckId, hasProfile, onComplete }: Pr
                 onClick={handleGenerate}
                 className={hasProfile ? "btn-ghost text-xs w-full" : "btn-primary text-xs w-full"}
               >
-                {hasProfile ? "regenerate profile" : "generate strategy profile →"}
+                {!hasProfile
+                  ? "generate strategy profile →"
+                  : isStale
+                  ? "regenerate profile (recommended)"
+                  : "regenerate profile"
+                }
               </button>
               {!hasProfile && (
                 <p className="text-xxs text-text-muted mt-1">
                   AI analyzes every card, ranks impact, maps synergies, runs simulation
+                </p>
+              )}
+              {hasProfile && isStale && (
+                <p className="text-xxs text-accent-yellow mt-1">
+                  {changedCount} change{changedCount !== 1 ? "s" : ""} since last generation — impact scores and simulation are approximate
                 </p>
               )}
             </div>
@@ -126,7 +146,6 @@ export default function StrategyGenerator({ deckId, hasProfile, onComplete }: Pr
           {/* Profile content */}
           {profile && !generating && (
             <div className="space-y-3 text-xs">
-              {/* Commander Role */}
               {commanderRole && (
                 <div>
                   <span className="text-xxs text-text-muted uppercase tracking-wider">commander role</span>
@@ -134,7 +153,6 @@ export default function StrategyGenerator({ deckId, hasProfile, onComplete }: Pr
                 </div>
               )}
 
-              {/* Primary Strategy */}
               {strategy && (
                 <div>
                   <span className="text-xxs text-text-muted uppercase tracking-wider">strategy</span>
@@ -142,7 +160,6 @@ export default function StrategyGenerator({ deckId, hasProfile, onComplete }: Pr
                 </div>
               )}
 
-              {/* Win Conditions */}
               {winConditions && winConditions.length > 0 && (
                 <div>
                   <span className="text-xxs text-text-muted uppercase tracking-wider">win conditions</span>
@@ -157,7 +174,6 @@ export default function StrategyGenerator({ deckId, hasProfile, onComplete }: Pr
                 </div>
               )}
 
-              {/* Critical Cards */}
               {criticalCards && criticalCards.length > 0 && (
                 <div>
                   <span className="text-xxs text-text-muted uppercase tracking-wider">critical cards</span>
@@ -165,7 +181,6 @@ export default function StrategyGenerator({ deckId, hasProfile, onComplete }: Pr
                 </div>
               )}
 
-              {/* Key Synergies */}
               {synergies && synergies.length > 0 && (
                 <div>
                   <span className="text-xxs text-text-muted uppercase tracking-wider">key synergies</span>
@@ -180,7 +195,6 @@ export default function StrategyGenerator({ deckId, hasProfile, onComplete }: Pr
                 </div>
               )}
 
-              {/* Weaknesses */}
               {weaknesses && weaknesses.length > 0 && (
                 <div>
                   <span className="text-xxs text-text-muted uppercase tracking-wider">weaknesses</span>
@@ -195,7 +209,6 @@ export default function StrategyGenerator({ deckId, hasProfile, onComplete }: Pr
                 </div>
               )}
 
-              {/* Role Needs */}
               {roleNeeds && (
                 <div>
                   <span className="text-xxs text-text-muted uppercase tracking-wider">role assessment</span>
@@ -222,7 +235,6 @@ export default function StrategyGenerator({ deckId, hasProfile, onComplete }: Pr
                 </div>
               )}
 
-              {/* Upgrade Priorities */}
               {upgradePriorities && upgradePriorities.length > 0 && (
                 <div>
                   <span className="text-xxs text-text-muted uppercase tracking-wider">upgrade priorities</span>

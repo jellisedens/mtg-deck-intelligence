@@ -1,6 +1,7 @@
 from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import flag_modified
 
 from database.session import get_db
 from models.user import User
@@ -35,12 +36,131 @@ def _get_user_deck(deck_id: UUID, user: User, db: Session) -> Deck:
     return deck
 
 
-def _invalidate_strategy_cache(deck: Deck):
-    """Clear all cached strategy data when deck composition changes.
-    Clears sim_tags, impact ratings, simulation, color health, summary -- everything.
-    User must regenerate the strategy profile after making changes."""
-    if deck.strategy_profile:
-        deck.strategy_profile = None
+def _patch_strategy_card_added(deck: Deck, card_name: str, scryfall_id: str, card_data: dict = None):
+    """Incrementally update strategy profile when a card is added.
+    No AI calls — just data manipulation for instant updates."""
+    profile = deck.strategy_profile
+    if not profile:
+        return
+
+    type_line = (card_data or {}).get("type_line", "")
+    oracle_text = (card_data or {}).get("oracle_text", "")
+    mana_cost = (card_data or {}).get("mana_cost", "")
+
+    # 1. Classify role for this single card (rule-based)
+    role = _classify_single_card(type_line, oracle_text)
+
+    # 2. Update role_data
+    role_data = profile.get("role_data") or {}
+    card_roles = role_data.get("card_roles", [])
+    card_roles.append({
+        "name": card_name,
+        "card_name": card_name,
+        "primary_role": role,
+        "secondary_roles": [],
+        "synergy": "Provisional — regenerate strategy for full analysis",
+    })
+    role_data["card_roles"] = card_roles
+
+    dist = role_data.get("role_distribution", {})
+    dist[role] = dist.get(role, 0) + 1
+    role_data["role_distribution"] = dist
+    profile["role_data"] = role_data
+
+    # 3. Add provisional impact rating
+    ratings = profile.get("card_impact_ratings", [])
+    ratings.append({
+        "card_name": card_name,
+        "score": 5,
+        "reason": "Provisional — regenerate strategy for full analysis",
+    })
+    profile["card_impact_ratings"] = ratings
+
+    # 4. Mark as stale and track changes
+    profile["simulation_stale"] = True
+    profile["cards_changed_since_regen"] = profile.get("cards_changed_since_regen", 0) + 1
+
+    deck.strategy_profile = profile
+
+
+def _patch_strategy_card_removed(deck: Deck, card_name: str):
+    """Incrementally update strategy profile when a card is removed.
+    No AI calls — just data manipulation for instant updates."""
+    profile = deck.strategy_profile
+    if not profile:
+        return
+
+    # 1. Find and remove from role_data
+    role_data = profile.get("role_data") or {}
+    card_roles = role_data.get("card_roles", [])
+    removed_role = None
+    new_roles = []
+    for cr in card_roles:
+        if cr.get("card_name", "").lower() == card_name.lower():
+            removed_role = cr.get("primary_role")
+        else:
+            new_roles.append(cr)
+    role_data["card_roles"] = new_roles
+
+    if removed_role:
+        dist = role_data.get("role_distribution", {})
+        if removed_role in dist:
+            dist[removed_role] = max(0, dist[removed_role] - 1)
+        role_data["role_distribution"] = dist
+    profile["role_data"] = role_data
+
+    # 2. Remove from impact ratings
+    ratings = profile.get("card_impact_ratings", [])
+    profile["card_impact_ratings"] = [
+        r for r in ratings if r.get("card_name", "").lower() != card_name.lower()
+    ]
+
+    # 3. Remove from critical cards if present
+    critical = profile.get("critical_cards", [])
+    profile["critical_cards"] = [
+        c for c in critical if c.lower() != card_name.lower()
+    ]
+
+    # 4. Mark as stale and track changes
+    profile["simulation_stale"] = True
+    profile["cards_changed_since_regen"] = profile.get("cards_changed_since_regen", 0) + 1
+
+    deck.strategy_profile = profile
+
+
+def _classify_single_card(type_line: str, oracle_text: str) -> str:
+    """Quick rule-based role classification for a single card."""
+    tl = type_line.lower()
+    ot = (oracle_text or "").lower()
+
+    if "land" in tl:
+        return "land"
+    if "add" in ot and ("{t}" in ot or "mana" in ot):
+        return "ramp"
+    if "search your library" in ot and "land" in ot:
+        return "ramp"
+    if "cost" in ot and "less" in ot:
+        return "cost_reducer"
+    if "draw" in ot and "card" in ot:
+        return "card_draw"
+    if "destroy" in ot or "exile" in ot:
+        if "target" in ot:
+            return "removal"
+        if "all" in ot:
+            return "board_wipe"
+    if "counter target" in ot:
+        return "removal"
+    if "create" in ot and "token" in ot:
+        return "token_generator"
+    if "search your library" in ot:
+        return "tutor"
+    if "return" in ot and "graveyard" in ot:
+        return "graveyard"
+    if "hexproof" in ot or "indestructible" in ot or "protection" in ot:
+        return "protection"
+    if "creature" in tl:
+        return "creature"
+    return "utility"
 
 
 # Basic lands exempt from singleton rule
@@ -198,7 +318,6 @@ def add_card(
 
     if existing:
         existing.quantity += request.quantity
-        _invalidate_strategy_cache(deck)
         db.commit()
         db.refresh(existing)
         return existing
@@ -211,7 +330,9 @@ def add_card(
         board=request.board,
     )
     db.add(card)
-    _invalidate_strategy_cache(deck)
+    _patch_strategy_card_added(deck, request.card_name, request.scryfall_id)
+    if deck.strategy_profile is not None:
+        flag_modified(deck, "strategy_profile")
     db.commit()
     db.refresh(card)
     return card
@@ -238,8 +359,11 @@ def update_card(
 
     if request.quantity is not None:
         if request.quantity <= 0:
+            removed_name = card.card_name
             db.delete(card)
-            _invalidate_strategy_cache(deck)
+            _patch_strategy_card_removed(deck, removed_name)
+            if deck.strategy_profile is not None:
+                flag_modified(deck, "strategy_profile")
             db.commit()
             raise HTTPException(
                 status_code=status.HTTP_200_OK,
@@ -253,10 +377,10 @@ def update_card(
     if request.notes is not None:
         card.notes = request.notes
 
-    _invalidate_strategy_cache(deck)
     db.commit()
     db.refresh(card)
     return card
+
 
 @router.put("/{deck_id}/preferences", response_model=DeckResponse)
 def update_preferences(
@@ -282,6 +406,7 @@ def update_preferences(
     db.refresh(deck)
     return deck
 
+
 @router.delete("/{deck_id}/cards/{card_id}", status_code=status.HTTP_204_NO_CONTENT)
 def remove_card(
     deck_id: UUID,
@@ -300,6 +425,9 @@ def remove_card(
     if not card:
         raise HTTPException(status_code=404, detail="Card not found in this deck")
 
+    card_name = card.card_name
     db.delete(card)
-    _invalidate_strategy_cache(deck)
+    _patch_strategy_card_removed(deck, card_name)
+    if deck.strategy_profile is not None:
+        flag_modified(deck, "strategy_profile")
     db.commit()

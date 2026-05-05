@@ -3,6 +3,7 @@ AI suggestion engine.
 Routes user prompts through intent classification to specialized prompt builders.
 """
 
+import re
 import os
 import json
 import time
@@ -34,10 +35,23 @@ async def get_suggestions(prompt: str, deck_cards: list = None, deck_info: dict 
     """
     t_start = time.time()
 
-    # Check for clarification needs
-    clarification = _check_for_clarification(prompt)
-    if clarification:
-        return clarification
+    # Handle vague responses to clarification ("any", "all", "I don't know")
+    vague_responses = [
+        "any", "all", "all types", "everything", "any type",
+        "i don't know", "i'm not sure", "im not sure", "not sure",
+        "idk", "whatever", "surprise me", "all of them",
+        "don't know", "no preference",
+    ]
+    if prompt.lower().strip() in vague_responses:
+        # Rewrite to a generic actionable prompt so intent classifier
+        # routes to suggest and the bypass/AI planner has something to work with
+        prompt = "suggest cards for this deck"
+        print(f"[AI] Vague clarification response detected, rewritten to: '{prompt}'")
+    else:
+        # Check for clarification needs
+        clarification = _check_for_clarification(prompt)
+        if clarification:
+            return clarification
 
     # Classify intent
     intent_result = classify_intent(prompt, has_deck=deck_cards is not None)
@@ -109,16 +123,24 @@ async def _handle_suggest(prompt: str, deck_cards: list, deck_info: dict,
                           simulation_data: dict, card_lookup: dict,
                           role_data: dict, analytics: dict) -> dict:
     """Handle card suggestion requests."""
-    # Build search plan
     t_plan = time.time()
+
+    # Try direct query bypass first (skips ~15s AI planning call)
+    plan = _try_direct_queries(prompt, deck_info)
+
+    # Build deck context (needed for main AI call regardless)
     deck_context = None
     if deck_cards:
         deck_context = build_deck_context(deck_cards, deck_info, analytics, card_lookup, role_data)
 
-    plan = _get_ai_plan(prompt, deck_context)
-    if "error" in plan:
-        return plan
-    print(f"[AI] Search plan ({time.time() - t_plan:.1f}s)")
+    if plan:
+        print(f"[AI] Direct bypass: {plan['reasoning']} ({time.time() - t_plan:.1f}s)")
+    else:
+        # Fall through to AI planner
+        plan = _get_ai_plan(prompt, deck_context)
+        if "error" in plan:
+            return plan
+        print(f"[AI] Search plan via AI ({time.time() - t_plan:.1f}s)")
 
     # Execute searches
     existing_cards = set()
@@ -138,12 +160,29 @@ async def _handle_suggest(prompt: str, deck_cards: list, deck_info: dict,
         search_results = await _broaden_search(prompt, plan, deck_context, search_results, existing_cards)
         print(f"[AI] Broadened to {len(search_results)} ({time.time() - t_broaden:.1f}s)")
 
-    # Build focused prompt
-    trimmed_results = search_results[:30]
+    # Build focused prompt — scale results to requested count
+    max_results = plan.get("max_results", 10)
+    max_cards = min(max_results + 10, 30)  # give AI some extra options to choose from
+    trimmed_results = search_results[:max_cards]
+    
+    # Slim card data for the AI prompt to reduce token count
+    slim_results = []
+    for card in trimmed_results:
+        slim_results.append({
+            "name": card["name"],
+            "mana_cost": card.get("mana_cost", ""),
+            "cmc": card.get("cmc", 0),
+            "type_line": card.get("type_line", ""),
+            "oracle_text": card.get("oracle_text", ""),
+            "rarity": card.get("rarity", ""),
+            "scryfall_id": card["scryfall_id"],
+            "edhrec_rank": card.get("edhrec_rank"),
+        })
+
     system, user_msg = build_suggest_prompt(
         prompt=prompt,
         plan=plan,
-        search_results=trimmed_results,
+        search_results=slim_results,
         deck_info=deck_info,
         simulation_data=simulation_data,
         synergy_rules=SYNERGY_RULES,
@@ -151,6 +190,7 @@ async def _handle_suggest(prompt: str, deck_cards: list, deck_info: dict,
     )
 
     # Call AI and process
+    print(f"[AI] Prompt size: system={len(system)} user={len(user_msg)} total={len(system)+len(user_msg)} chars (~{(len(system)+len(user_msg))//4} tokens)")
     t_ai = time.time()
     result = _call_ai(system, user_msg)
     print(f"[AI] Main AI call ({time.time() - t_ai:.1f}s)")
@@ -159,6 +199,7 @@ async def _handle_suggest(prompt: str, deck_cards: list, deck_info: dict,
     result.setdefault("debug", {})
     result["debug"]["scryfall_queries"] = plan.get("scryfall_queries", [])
     result["debug"]["total_search_results"] = len(search_results)
+    result["debug"]["direct_bypass"] = plan.get("direct_bypass", False)
 
     return result
 
@@ -237,7 +278,7 @@ async def _handle_swap(prompt: str, deck_cards: list, deck_info: dict,
     system, user_msg = build_swap_prompt(
         prompt=prompt,
         plan=plan,
-        search_results=search_results[:30],
+        search_results=search_results[:20],
         deck_info=deck_info,
         simulation_data=simulation_data,
         deck_cards=deck_cards,
@@ -339,32 +380,47 @@ def _verify_cuts(result: dict, deck_info: dict) -> dict:
 
 
 def _check_for_clarification(prompt: str) -> dict | None:
-    """Check if the prompt needs clarification before searching."""
+    """Check if the prompt needs clarification before searching.
+    
+    Only triggers for truly bare/vague prompts like just "ramp" or "removal".
+    Does NOT trigger when the user includes action words like "suggest", "find",
+    "recommend" etc. — those indicate the user knows what they want.
+    """
     prompt_lower = prompt.lower().strip()
-
+    
+    # Never clarify if the user has an action word — they know what they want
+    action_words = [
+        "suggest", "find", "recommend", "show", "list", "give",
+        "need", "want", "looking for", "search", "get me",
+        "add", "include", "put in",
+    ]
+    has_action = any(word in prompt_lower for word in action_words)
+    
     for term, config in CLARIFICATIONS.items():
         term_words = term.split()
 
-        is_broad = (
+        # Only trigger for bare terms with no action words and no qualifiers
+        is_bare = (
             prompt_lower == term
-            or prompt_lower in [f"{term} cards", f"find {term}", f"suggest {term}",
-                                f"recommend {term}", f"show me {term}", f"list {term}",
-                                f"i need {term}", f"need {term}", f"what {term}",
-                                f"best {term}", f"good {term}"]
-            or (
-                all(w in prompt_lower for w in term_words)
-                and len(prompt_lower.split()) <= 8
-                and not any(qualifier in prompt_lower for qualifier in [
-                    "under", "below", "cheap", "budget", "expensive",
-                    "best", "creature", "artifact", "instant", "sorcery",
-                    "enchantment", "land", "dork", "rock", "spell",
-                    "board wipe", "spot", "counter", "engine", "draw",
-                    "specific", "exactly", "only", "just",
-                ])
-            )
+            or prompt_lower in [f"{term} cards", f"best {term}", f"good {term}",
+                                f"what {term}", f"{term}?"]
+        )
+        
+        # Also trigger if it's short and vague (but NOT if it has an action word)
+        is_vague = (
+            not has_action
+            and all(w in prompt_lower for w in term_words)
+            and len(prompt_lower.split()) <= 4
+            and not any(qualifier in prompt_lower for qualifier in [
+                "under", "below", "cheap", "budget", "expensive",
+                "creature", "artifact", "instant", "sorcery",
+                "enchantment", "land", "dork", "rock", "spell",
+                "board wipe", "spot", "counter", "engine",
+                "specific", "exactly", "only", "just",
+            ])
         )
 
-        if is_broad:
+        if is_bare or is_vague:
             return {
                 "needs_clarification": True,
                 "clarification_question": config["display"],
@@ -373,8 +429,320 @@ def _check_for_clarification(prompt: str) -> dict | None:
                 "suggestions": [],
                 "cuts": [],
                 "strategy_notes": None,
+                "_original_category": term,  # track what triggered clarification
             }
 
+    return None
+
+def _try_direct_queries(prompt: str, deck_info: dict = None) -> dict | None:
+    """
+    For common request patterns, build Scryfall queries directly
+    without an AI call. Returns a plan dict if matched, None if
+    AI planning is needed.
+    
+    This bypasses _get_ai_plan() (~15s) for common categories,
+    bringing total suggest time from ~23s to ~8-10s.
+    """
+    prompt_lower = prompt.lower().strip()
+    
+    # Extract format and color identity from deck info
+    fmt = "commander"  # default
+    color_filter = ""
+    
+    if deck_info:
+        fmt = deck_info.get("format", "commander") or "commander"
+        profile = deck_info.get("strategy_profile") or {}
+        colors = profile.get("color_identity", [])
+        if colors:
+            color_filter = f" id<=({''.join(colors)})"
+    
+    format_filter = f" f:{fmt}"
+    base = format_filter + color_filter
+    
+    # ── Pattern definitions ──────────────────────────────────
+    # Each entry: list of trigger phrases → list of Scryfall queries
+    # Queries use {base} placeholder for format + color filters
+    
+    PATTERNS = {
+        "ramp": {
+            "triggers": [
+                "ramp", "mana rock", "mana rocks", "mana dork", "mana dorks",
+                "acceleration", "mana acceleration", "ramp cards",
+                "mana ramp", "more mana",
+            ],
+            "queries": [
+                f"t:creature o:\"{{T}}: Add\"{base} cmc<=3",           # mana dorks
+                f"t:artifact o:\"{{T}}: Add\"{base} cmc<=3",           # mana rocks
+                f"o:\"search your library\" o:land t:sorcery{base}",   # land search
+                f"o:\"additional land\"{base}",                         # extra land drops
+                f"o:\"cost\" o:\"less to cast\"{base}",                # cost reducers
+                f"o:\"create\" o:\"Treasure\"{base}",                  # treasure makers
+            ],
+            "reasoning": "Direct match: ramp (all subcategories)",
+        },
+        "mana_dorks": {
+            "triggers": ["mana dork", "mana dorks", "dorks"],
+            "queries": [
+                f"t:creature o:\"{{T}}: Add\"{base} cmc<=2",
+                f"t:creature o:\"{{T}}: Add\"{base} cmc=3",
+            ],
+            "reasoning": "Direct match: mana dorks specifically",
+        },
+        "mana_rocks": {
+            "triggers": ["mana rock", "mana rocks", "rocks", "artifacts that produce mana"],
+            "queries": [
+                f"t:artifact o:\"{{T}}: Add\"{base} cmc<=2",
+                f"t:artifact o:\"{{T}}: Add\"{base} cmc=3",
+            ],
+            "reasoning": "Direct match: mana rocks specifically",
+        },
+        "land_ramp": {
+            "triggers": ["land ramp", "land search", "fetch lands", "ramp spells"],
+            "queries": [
+                f"o:\"search your library\" o:land t:sorcery{base}",
+                f"o:\"put\" o:land o:\"onto the battlefield\"{base}",
+            ],
+            "reasoning": "Direct match: land-based ramp",
+        },
+        "cost_reducers": {
+            "triggers": ["cost reducer", "cost reducers", "medallion", "medallions", "make spells cheaper"],
+            "queries": [
+                f"o:\"cost\" o:\"less to cast\"{base}",
+                f"o:\"spells you cast cost\"{base}",
+            ],
+            "reasoning": "Direct match: cost reduction effects",
+        },
+        "removal": {
+            "triggers": [
+                "removal", "remove", "kill spell", "kill spells",
+                "removal spells", "interaction",
+            ],
+            "queries": [
+                f"o:\"destroy target\" (t:instant or t:sorcery){base}",
+                f"o:\"exile target\" (t:instant or t:sorcery){base}",
+                f"o:\"destroy all\" (t:instant or t:sorcery){base}",   # board wipes
+                f"o:\"deals\" o:\"damage to\" t:instant{base}",        # damage removal
+            ],
+            "reasoning": "Direct match: removal (all subcategories)",
+        },
+        "spot_removal": {
+            "triggers": ["spot removal", "targeted removal", "single target removal"],
+            "queries": [
+                f"o:\"destroy target\" (t:instant or t:sorcery){base}",
+                f"o:\"exile target\" (t:instant or t:sorcery){base}",
+            ],
+            "reasoning": "Direct match: spot removal",
+        },
+        "board_wipes": {
+            "triggers": ["board wipe", "board wipes", "sweeper", "sweepers", "wrath", "wraths"],
+            "queries": [
+                f"o:\"destroy all creatures\"{base}",
+                f"o:\"all creatures get\" o:\"-\" (t:instant or t:sorcery){base}",
+                f"o:\"exile all\" (t:instant or t:sorcery){base}",
+            ],
+            "reasoning": "Direct match: board wipes",
+        },
+        "card_draw": {
+            "triggers": [
+                "card draw", "draw", "draw cards", "draw engine",
+                "card advantage", "draw spells",
+            ],
+            "queries": [
+                f"o:\"draw\" t:enchantment{base}",
+                f"o:\"draw\" (t:instant or t:sorcery){base}",
+                f"o:\"draw\" t:creature{base}",
+            ],
+            "reasoning": "Direct match: card draw (all types)",
+        },
+        "creatures": {
+            "triggers": ["creatures", "creature", "suggest creatures"],
+            "queries": [
+                f"t:creature{base}",
+            ],
+            "reasoning": "Direct match: creatures",
+        },
+        "lands": {
+            "triggers": ["lands", "land", "land base", "mana base", "mana fixing"],
+            "queries": [
+                f"t:land{base}",
+            ],
+            "reasoning": "Direct match: lands",
+        },
+        "protection": {
+            "triggers": [
+                "protection", "protect", "hexproof", "indestructible",
+                "counterspell", "counterspells", "counter",
+            ],
+            "queries": [
+                f"o:\"hexproof\" (t:instant or t:artifact or t:equipment){base}",
+                f"o:\"indestructible\" (t:instant or t:artifact){base}",
+                f"o:\"counter target\" t:instant{base}",
+            ],
+            "reasoning": "Direct match: protection effects",
+        },
+        "tutors": {
+            "triggers": ["tutor", "tutors", "search library"],
+            "queries": [
+                f"o:\"search your library\" (t:instant or t:sorcery){base}",
+                f"o:\"search your library\" t:creature{base}",
+            ],
+            "reasoning": "Direct match: tutor effects",
+        },
+        "tokens": {
+            "triggers": ["tokens", "token", "token generators", "token maker"],
+            "queries": [
+                f"o:\"create\" o:\"token\" t:creature{base}",
+                f"o:\"create\" o:\"token\" t:enchantment{base}",
+                f"o:\"create\" o:\"token\" (t:instant or t:sorcery){base}",
+            ],
+            "reasoning": "Direct match: token generation",
+        },
+        "recursion": {
+            "triggers": [
+                "recursion", "graveyard", "reanimation", "reanimate",
+                "return from graveyard", "graveyard recursion",
+            ],
+            "queries": [
+                f"o:\"return\" o:\"from your graveyard\" (t:instant or t:sorcery){base}",
+                f"o:\"return\" o:\"graveyard to the battlefield\"{base}",
+            ],
+            "reasoning": "Direct match: graveyard recursion",
+        },
+        "sacrifice": {
+            "triggers": ["sacrifice", "sac outlet", "sac outlets", "aristocrats"],
+            "queries": [
+                f"o:\"sacrifice\" o:\"whenever\"{base}",
+                f"o:\"whenever\" o:\"dies\"{base}",
+            ],
+            "reasoning": "Direct match: sacrifice/aristocrats",
+        },
+        "equipment": {
+            "triggers": ["equipment", "equipments", "voltron"],
+            "queries": [
+                f"t:equipment{base}",
+            ],
+            "reasoning": "Direct match: equipment",
+        },
+        "enchantments": {
+            "triggers": ["enchantments", "enchantment", "aura", "auras"],
+            "queries": [
+                f"t:enchantment{base}",
+            ],
+            "reasoning": "Direct match: enchantments",
+        },
+    }
+    
+    # ── Determine how many results the user wants ────────────
+    requested_count = None
+    
+    # Check for explicit numbers: "suggest 15 ramp cards", "give me 3 creatures"
+    count_match = re.search(r'\b(\d+)\s+\w+\s*(card|creature|spell|suggestion)', prompt_lower)
+    if count_match:
+        requested_count = min(int(count_match.group(1)), 20)
+    
+    # Check for "all" signals: "show me all", "return all", "list all"
+    if any(phrase in prompt_lower for phrase in ["all ", "every ", "as many as"]):
+        requested_count = 20
+    
+    # Default: 5 for broad categories, let AI planner handle open-ended
+    default_count = requested_count or 5
+
+    # ── Complexity check ─────────────────────────────────────
+    # Strip filler words to measure how specific the request is.
+    # Simple requests (1-2 meaningful words) can be bypassed.
+    # Complex requests (3+ meaningful words) need the AI planner.
+    filler_words = {
+        "suggest", "find", "recommend", "show", "give", "list", "get",
+        "me", "some", "good", "best", "cards", "card", "for", "this",
+        "deck", "please", "can", "you", "i", "need", "want", "more",
+        "a", "the", "my", "in", "of", "to", "and", "or", "with",
+        "new", "add", "spells", "spell", "pieces", "options", "suggestions",
+        "that", "are", "is", "it", "be", "do", "have", "has",
+        "would", "could", "should", "will", "also", "too", "very",
+    }
+    meaningful_words = [w for w in prompt_lower.split() if w not in filler_words and len(w) > 1]
+    is_simple = len(meaningful_words) <= 2
+    
+    # If 2 meaningful words, check they don't span multiple categories
+    if len(meaningful_words) == 2:
+        # Check if both words appear in the same trigger phrase
+        combined = " ".join(meaningful_words)
+        found_in_trigger = False
+        for pattern in PATTERNS.values():
+            for trigger in pattern["triggers"]:
+                if all(w in trigger for w in meaningful_words):
+                    found_in_trigger = True
+                    break
+            if found_in_trigger:
+                break
+        if not found_in_trigger:
+            is_simple = False
+    
+    print(f"[AI] Bypass check: meaningful_words={meaningful_words}, is_simple={is_simple}")
+    
+    # Priority ordering: specific subcategories first
+    priority_order = [
+        "mana_dorks", "mana_rocks", "land_ramp", "cost_reducers",   # ramp subs
+        "spot_removal", "board_wipes",                                # removal subs
+        "ramp", "removal", "card_draw",                               # broad categories
+        "creatures", "lands", "protection", "tutors", "tokens",
+        "recursion", "sacrifice", "equipment", "enchantments",
+    ]
+    
+    # Only bypass for simple requests (1-2 meaningful words)
+    # "suggest ramp cards" → ["ramp"] → bypass
+    # "suggest ramp that synergizes with dragons" → ["ramp", "synergizes", "dragons"] → AI planner
+    if is_simple:
+        for pattern_key in priority_order:
+            pattern = PATTERNS[pattern_key]
+            for trigger in pattern["triggers"]:
+                if re.search(rf'\b{re.escape(trigger)}\b', prompt_lower):
+                    return {
+                        "scryfall_queries": pattern["queries"],
+                        "reasoning": pattern["reasoning"],
+                        "mode": "search",
+                        "direct_bypass": True,
+                        "max_results": default_count,
+                    }
+    
+    # ── CMC-specific creature requests ───────────────────────
+    # "suggest 2-drops" or "need more 3 drops" or "1-drop creatures"
+    cmc_match = re.search(r'(\d+)[- ]?drops?', prompt_lower)
+    if cmc_match:
+        cmc = cmc_match.group(1)
+        queries = [f"t:creature cmc={cmc}{base}"]
+        return {
+            "scryfall_queries": queries,
+            "reasoning": f"Direct match: {cmc}-drop creatures",
+            "mode": "search",
+            "direct_bypass": True,
+            "max_results": default_count,
+        }
+    
+    # ── Creature type requests (only if simple) ──────────────
+    # "suggest dragons" "need more elves" "zombie tribal"
+    common_types = [
+        "dragon", "elf", "elves", "goblin", "zombie", "angel", "demon",
+        "merfolk", "vampire", "wizard", "warrior", "knight", "elemental",
+        "beast", "dinosaur", "pirate", "spirit", "human", "cat", "dog",
+        "bird", "snake", "spider", "rat", "sliver", "artifact creature",
+    ]
+    if is_simple:
+        for creature_type in common_types:
+            if re.search(rf'\b{re.escape(creature_type)}s?\b', prompt_lower):
+                type_singular = creature_type.rstrip('s')
+                if creature_type == "elves":
+                    type_singular = "elf"
+                queries = [f"t:{type_singular}{base}"]
+                return {
+                    "scryfall_queries": queries,
+                    "reasoning": f"Direct match: {type_singular} creatures",
+                    "mode": "search",
+                    "direct_bypass": True,
+                    "max_results": default_count,
+                }
+    
+    # No match — fall through to AI planner
     return None
 
 

@@ -14,11 +14,21 @@ interface Message {
 
 interface Props {
   deckId: string;
+  onAddCard?: (scryfallId: string, cardName: string) => Promise<void>;
 }
 
-function SuggestionCardRow({ card }: { card: CardSuggestion }) {
+function SuggestionCardRow({
+  card,
+  onAdd,
+}: {
+  card: CardSuggestion;
+  onAdd?: (scryfallId: string, cardName: string) => Promise<void>;
+}) {
   const [expanded, setExpanded] = useState(false);
   const [imgError, setImgError] = useState(false);
+  const [added, setAdded] = useState(false);
+  const [adding, setAdding] = useState(false);
+  const [addError, setAddError] = useState<string | null>(null);
 
   return (
     <div className="border border-border rounded p-2 hover:bg-bg-hover transition-colors">
@@ -37,7 +47,40 @@ function SuggestionCardRow({ card }: { card: CardSuggestion }) {
             {card.mana_cost && (
               <span className="text-xxs text-text-muted">{card.mana_cost}</span>
             )}
-            <span className="text-xxs text-text-muted ml-auto">{expanded ? "▲" : "▼"}</span>
+            <div className="flex items-center gap-1 ml-auto">
+              {onAdd && card.scryfall_id && (
+                <button
+                  onClick={async (e) => {
+                    e.stopPropagation();
+                    if (added || adding) return;
+                    setAdding(true);
+                    setAddError(null);
+                    try {
+                      await onAdd(card.scryfall_id!, card.card_name);
+                      setAdded(true);
+                      setTimeout(() => setAdded(false), 3000);
+                    } catch (err: unknown) {
+                      const msg = err instanceof Error ? err.message : "Failed to add";
+                      setAddError(msg.length > 30 ? msg.slice(0, 30) + "…" : msg);
+                      setTimeout(() => setAddError(null), 4000);
+                    } finally {
+                      setAdding(false);
+                    }
+                  }}
+                  disabled={added || adding}
+                  className={`text-xxs px-1.5 py-0.5 rounded transition-colors ${
+                    added
+                      ? "bg-accent-green/20 text-accent-green"
+                      : addError
+                      ? "bg-accent-red/20 text-accent-red"
+                      : "bg-bg-tertiary text-text-muted hover:text-accent-green hover:bg-accent-green/10"
+                  }`}
+                >
+                  {added ? "added ✓" : adding ? "..." : addError ? addError : "+ add"}
+                </button>
+              )}
+              <span className="text-xxs text-text-muted">{expanded ? "▲" : "▼"}</span>
+            </div>
           </div>
           <p className="text-xs text-text-secondary mt-0.5">{card.reasoning}</p>
         </div>
@@ -106,7 +149,15 @@ function CutCardRow({ cut }: { cut: CutSuggestion }) {
   );
 }
 
-function AIResponse({ response }: { response: AISuggestionResponse }) {
+function AIResponse({
+  response,
+  onOptionClick,
+  onAddCard,
+}: {
+  response: AISuggestionResponse;
+  onOptionClick?: (option: string) => void;
+  onAddCard?: (scryfallId: string, cardName: string) => Promise<void>;
+}) {
   return (
     <div className="space-y-3">
       {/* Summary */}
@@ -130,7 +181,11 @@ function AIResponse({ response }: { response: AISuggestionResponse }) {
             suggestions ({response.suggestions.length})
           </div>
           {response.suggestions.map((card, i) => (
-            <SuggestionCardRow key={`${card.card_name}-${i}`} card={card} />
+            <SuggestionCardRow
+              key={`${card.card_name}-${i}`}
+              card={card}
+              onAdd={onAddCard}
+            />
           ))}
         </div>
       )}
@@ -147,21 +202,41 @@ function AIResponse({ response }: { response: AISuggestionResponse }) {
         </div>
       )}
 
-      {/* Clarification */}
+      {/* Clarification — now with clickable options */}
       {response.needs_clarification && response.clarification_question && (
-        <div className="text-xs text-accent-yellow">
-          {response.clarification_question}
+        <div className="space-y-2">
+          <div className="text-xs text-accent-yellow">
+            {response.clarification_question}
+          </div>
+          {response.clarification_options && response.clarification_options.length > 0 && (
+            <div className="space-y-1">
+              {response.clarification_options.map((option, i) => (
+                <button
+                  key={i}
+                  onClick={() => onOptionClick?.(option.label)}
+                  className="block w-full text-left text-xs text-text-secondary hover:text-accent-green px-3 py-1.5 rounded hover:bg-bg-hover transition-colors border border-border"
+                >
+                  <span className="text-accent-green mr-1">→</span>
+                  <span className="font-medium">{option.label}</span>
+                  {option.description && (
+                    <span className="text-text-muted ml-1">— {option.description}</span>
+                  )}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>
   );
 }
 
-export default function AISuggestPanel({ deckId }: Props) {
+export default function AISuggestPanel({ deckId, onAddCard }: Props) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [elapsed, setElapsed] = useState(0);
+  const [lastClarificationCategory, setLastClarificationCategory] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -183,12 +258,19 @@ export default function AISuggestPanel({ deckId }: Props) {
     };
   }, [loading]);
 
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    if (!input.trim() || loading) return;
+  async function sendPrompt(userMessage: string) {
+    if (!userMessage.trim() || loading) return;
 
-    const userMessage = input.trim();
-    setInput("");
+    let promptToSend = userMessage;
+    if (lastClarificationCategory) {
+      const vague = ["all types", "all", "everything", "any", "any type"];
+      if (vague.includes(userMessage.toLowerCase().trim())) {
+        promptToSend = `suggest all types of ${lastClarificationCategory}`;
+      } else {
+        promptToSend = `suggest ${userMessage.toLowerCase()} for ${lastClarificationCategory}`;
+      }
+      setLastClarificationCategory(null);
+    }
 
     setMessages((prev) => [
       ...prev,
@@ -199,9 +281,19 @@ export default function AISuggestPanel({ deckId }: Props) {
 
     try {
       const response = await aiSuggest({
-        prompt: userMessage,
+        prompt: promptToSend,
         deck_id: deckId,
       });
+
+      if (response.needs_clarification && (response as any)._original_category) {
+        setLastClarificationCategory((response as any)._original_category);
+      } else if (response.needs_clarification) {
+        const question = response.clarification_question || "";
+        const categoryMatch = question.match(/what (?:type|kind) of (\w+)/i);
+        if (categoryMatch) {
+          setLastClarificationCategory(categoryMatch[1].toLowerCase());
+        }
+      }
 
       setMessages((prev) => {
         const updated = [...prev];
@@ -226,6 +318,19 @@ export default function AISuggestPanel({ deckId }: Props) {
     } finally {
       setLoading(false);
     }
+  }
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!input.trim() || loading) return;
+    const userMessage = input.trim();
+    setInput("");
+    await sendPrompt(userMessage);
+  }
+
+  function handleOptionClick(option: string) {
+    if (loading) return;
+    sendPrompt(option);
   }
 
   return (
@@ -281,7 +386,13 @@ export default function AISuggestPanel({ deckId }: Props) {
                 {msg.error && (
                   <div className="text-accent-red text-xs">{msg.error}</div>
                 )}
-                {msg.response && <AIResponse response={msg.response} />}
+                {msg.response && (
+                  <AIResponse
+                    response={msg.response}
+                    onOptionClick={handleOptionClick}
+                    onAddCard={onAddCard}
+                  />
+                )}
               </div>
             )}
           </div>

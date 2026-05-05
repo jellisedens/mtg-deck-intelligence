@@ -14,10 +14,11 @@ import StrategyGenerator from "@/components/StrategyGenerator";
 import { getDeck, addCard, updateCard, removeCard, getStrategy } from "@/lib/api";
 import { useCardCache } from "@/lib/card-cache";
 import { Deck, ScryfallCard } from "@/lib/types";
-import { usePathname} from "next/navigation";
+import { usePathname } from "next/navigation";
 
 function DeckBuilderContent({ deckId }: { deckId: string }) {
   const router = useRouter();
+  const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8001";
 
   const [deck, setDeck] = useState<Deck | null>(null);
   const [loading, setLoading] = useState(true);
@@ -34,7 +35,6 @@ function DeckBuilderContent({ deckId }: { deckId: string }) {
       const data = await getDeck(deckId);
       setDeck(data);
 
-      // Check strategy profile
       const strat = await getStrategy(deckId);
       setHasStrategy(!!strat);
 
@@ -64,18 +64,56 @@ function DeckBuilderContent({ deckId }: { deckId: string }) {
       (!deck.cards || !deck.cards.some((c) => c.board === "commander"));
 
     try {
-      const updated = await addCard(deckId, {
+      await addCard(deckId, {
         scryfall_id: card.id,
         card_name: card.name,
         quantity: 1,
         board: isCommander ? "commander" : "main",
       });
-      setDeck(updated);
+      const refreshed = await getDeck(deckId);
+      setDeck(refreshed);
       cacheCard(card);
+      const strat = await getStrategy(deckId);
+      setHasStrategy(!!strat);
     } catch (err: unknown) {
       setActionError(
         err instanceof Error ? err.message : "Failed to add card"
       );
+    }
+  }
+
+  async function handleAddCardById(scryfallId: string, cardName: string) {
+    if (!deck) return;
+    setActionError("");
+    try {
+      const res = await fetch(`${API_BASE}/decks/${deckId}/cards`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${localStorage.getItem("mtg_token")}`,
+        },
+        body: JSON.stringify({
+          scryfall_id: scryfallId,
+          card_name: cardName,
+          quantity: 1,
+          board: "main",
+        }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail || `Failed: ${res.status}`);
+      }
+      const refreshed = await getDeck(deckId);
+      setDeck(refreshed);
+      await fetchCards([scryfallId]);
+      // Re-check strategy status
+      const strat = await getStrategy(deckId);
+      setHasStrategy(!!strat);
+    } catch (err: unknown) {
+      setActionError(
+        err instanceof Error ? err.message : "Failed to add card"
+      );
+      throw err;
     }
   }
 
@@ -234,13 +272,14 @@ function DeckBuilderContent({ deckId }: { deckId: string }) {
             deckId={deckId}
             hasProfile={hasStrategy}
             onComplete={() => window.location.reload()}
+            cardCount={deck.cards?.length || 0}
           />
           <DeckPreferences
             deckId={deckId}
             currentPreferences={deck.preferences as unknown as Record<string, string | null> | null}
             onSaved={() => loadDeck()}
           />
-          <AISuggestPanel deckId={deckId} />
+          <AISuggestPanel deckId={deckId} onAddCard={handleAddCardById} />
           <DeckAnalytics
             deckId={deckId}
             cardCount={deck.cards?.reduce((sum, c) => sum + c.quantity, 0) || 0}
@@ -265,7 +304,6 @@ function DeckBuilderContent({ deckId }: { deckId: string }) {
     </div>
   );
 }
-import { fromJSON } from "postcss";
 
 export default function DeckBuilderPage() {
   const pathname = usePathname();

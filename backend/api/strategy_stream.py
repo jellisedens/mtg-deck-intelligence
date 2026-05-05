@@ -47,10 +47,8 @@ async def stream_strategy_generation(
 ):
     """
     Generate strategy profile with real-time progress updates via SSE.
-    Connect with EventSource in the frontend to receive progress.
     Uses query param token because EventSource cannot set Authorization headers.
     """
-    # Manual auth for SSE
     from services.auth import decode_access_token
     from models.user import User as UserModel
 
@@ -76,212 +74,233 @@ async def stream_strategy_generation(
         raise HTTPException(status_code=400, detail="Deck has no cards")
 
     async def generate():
-        total_start = time.time()
-        loop = asyncio.get_event_loop()
+        try:
+            total_start = time.time()
+            loop = asyncio.get_event_loop()
 
-        # Step 1: Analytics
-        yield _sse_message({
-            "step": "analytics",
-            "message": "Analyzing deck composition...",
-            "progress": 5,
-        })
+            # Step 1: Analytics
+            yield _sse_message({
+                "step": "analytics",
+                "message": "Analyzing deck composition...",
+                "progress": 5,
+            })
 
-        analytics = await compute_analytics(cards, include_card_data=True)
-        card_lookup = analytics.pop("_card_lookup", {})
-        deck_info = {"name": deck.name, "format": deck.format, "description": deck.description}
+            analytics = await compute_analytics(cards, include_card_data=True)
+            card_lookup = analytics.pop("_card_lookup", {})
+            deck_info = {"name": deck.name, "format": deck.format, "description": deck.description}
 
-        yield _sse_message({
-            "step": "analytics",
-            "message": "Deck data loaded",
-            "progress": 10,
-        })
+            yield _sse_message({
+                "step": "analytics",
+                "message": "Deck data loaded",
+                "progress": 10,
+            })
 
-        # Step 2: Phase 1 - roles + profile + sim tags (parallel)
-        yield _sse_message({
-            "step": "phase1",
-            "message": "Classifying card roles and generating strategy...",
-            "progress": 15,
-        })
+            # Step 2: Phase 1 - roles + profile + sim tags (parallel)
+            yield _sse_message({
+                "step": "phase1",
+                "message": "Classifying card roles and generating strategy...",
+                "progress": 15,
+            })
 
-        role_future = loop.run_in_executor(
-            _executor,
-            lambda: classify_deck_roles(cards, card_lookup, deck_info)
-        )
-
-        profile_future = loop.run_in_executor(
-            _executor,
-            lambda: generate_base_profile(
-                deck_info=deck_info, deck_cards=cards, card_lookup=card_lookup,
-                analytics=analytics,
-                role_data={"primary_creature_type": "None", "role_distribution": {}, "card_roles": []},
-            )
-        )
-
-        sim_tag_batches = build_sim_tag_batches(cards, card_lookup)
-        sim_tag_futures = []
-        for system_prompt, user_msg, batch in sim_tag_batches:
-            future = loop.run_in_executor(
+            role_future = loop.run_in_executor(
                 _executor,
-                lambda s=system_prompt, u=user_msg, b=batch: _call_sim_tag_batch(s, u, b)
+                lambda: classify_deck_roles(cards, card_lookup, deck_info)
             )
-            sim_tag_futures.append(future)
 
-        # Track completion of phase 1 tasks
-        sim_tags_done = 0
-        total_sim_batches = len(sim_tag_futures)
+            profile_future = loop.run_in_executor(
+                _executor,
+                lambda: generate_base_profile(
+                    deck_info=deck_info, deck_cards=cards, card_lookup=card_lookup,
+                    analytics=analytics,
+                    role_data={"primary_creature_type": "None", "role_distribution": {}, "card_roles": []},
+                )
+            )
 
-        # Wait for roles and profile first
-        role_data = await role_future
-        yield _sse_message({
-            "step": "roles",
-            "message": "Card roles classified",
-            "progress": 30,
-        })
+            sim_tag_batches = build_sim_tag_batches(cards, card_lookup)
+            sim_tag_futures = []
+            for system_prompt, user_msg, batch in sim_tag_batches:
+                future = loop.run_in_executor(
+                    _executor,
+                    lambda s=system_prompt, u=user_msg, b=batch: _call_sim_tag_batch(s, u, b)
+                )
+                sim_tag_futures.append(future)
 
-        profile = await profile_future
-        yield _sse_message({
-            "step": "profile",
-            "message": "Strategy profile generated",
-            "progress": 40,
-        })
+            # Track completion of phase 1 tasks
+            sim_tags_done = 0
+            total_sim_batches = len(sim_tag_futures)
 
-        if "error" in profile:
+            # Wait for roles and profile first
+            role_data = await role_future
+            yield _sse_message({
+                "step": "roles",
+                "message": "Card roles classified",
+                "progress": 30,
+            })
+
+            profile = await profile_future
+            yield _sse_message({
+                "step": "profile",
+                "message": "Strategy profile generated",
+                "progress": 40,
+            })
+
+            if "error" in profile:
+                yield _sse_message({
+                    "step": "error",
+                    "message": f"Strategy generation failed: {profile['error']}",
+                    "progress": 0,
+                })
+                return
+
+            # Step 3: Launch impact batches
+            yield _sse_message({
+                "step": "impact",
+                "message": "Rating card impact scores...",
+                "progress": 45,
+            })
+
+            impact_batches = build_impact_batches(
+                deck_info=deck_info, deck_cards=cards, card_lookup=card_lookup,
+                analytics=analytics, role_data=role_data, profile=profile,
+            )
+
+            impact_futures = []
+            for system_prompt, user_msg in impact_batches:
+                future = loop.run_in_executor(
+                    _executor,
+                    lambda s=system_prompt, u=user_msg: _call_impact_batch(s, u)
+                )
+                impact_futures.append(future)
+
+            # Wait for all remaining tasks
+            all_remaining = impact_futures + sim_tag_futures
+            total_remaining = len(all_remaining)
+            done_count = 0
+
+            for coro in asyncio.as_completed(all_remaining):
+                await coro
+                done_count += 1
+                pct = 45 + int((done_count / total_remaining) * 40)
+                yield _sse_message({
+                    "step": "batches",
+                    "message": f"Processing AI batches ({done_count}/{total_remaining})...",
+                    "progress": pct,
+                })
+
+            # Collect results
+            impact_results = [f.result() for f in impact_futures]
+            sim_tag_results = [f.result() for f in sim_tag_futures]
+
+            # Merge impact ratings
+            all_ratings = []
+            for batch_result in impact_results:
+                if batch_result and isinstance(batch_result, list):
+                    all_ratings.extend(batch_result)
+
+            seen = set()
+            deduped = []
+            for rating in all_ratings:
+                name = rating.get("card_name", "").lower()
+                if name not in seen:
+                    seen.add(name)
+                    deduped.append(rating)
+            profile["card_impact_ratings"] = deduped
+
+            # Merge sim tags
+            sim_tags = {}
+            for batch_result in sim_tag_results:
+                if batch_result and isinstance(batch_result, dict):
+                    sim_tags.update(batch_result)
+            profile["sim_tags"] = sim_tags
+
+            yield _sse_message({
+                "step": "summary",
+                "message": "Building deck summary...",
+                "progress": 88,
+            })
+
+            # Compact summary
+            commander_text = _get_commander_text(cards, card_lookup)
+            profile["deck_summary"] = _build_compact_summary(
+                deck_info=deck_info, analytics=analytics, role_data=role_data,
+                profile=profile, commander_text=commander_text,
+            )
+
+            # Step 4: Simulation
+            yield _sse_message({
+                "step": "simulation",
+                "message": "Running 500-game simulation...",
+                "progress": 90,
+            })
+
+            main_deck_cards = []
+            for card in cards:
+                if card.board != "main":
+                    continue
+                card_data = card_lookup.get(card.scryfall_id)
+                if card_data:
+                    main_deck_cards.append({"card_data": card_data, "quantity": card.quantity})
+
+            sim_results = {}
+            if main_deck_cards:
+                sim_results = run_simulation(
+                    deck_cards=main_deck_cards, sim_tags=sim_tags, n_games=500, turns=10,
+                )
+                profile["cached_simulation"] = sim_results
+                color_health = compute_color_health(sim_results, analytics)
+                profile["color_health"] = color_health
+
+            yield _sse_message({
+                "step": "saving",
+                "message": "Saving profile to database...",
+                "progress": 95,
+            })
+
+            # Role data
+            profile["role_data"] = {
+                "role_distribution": role_data.get("role_distribution", {}),
+                "card_roles": role_data.get("card_roles", []),
+                "primary_creature_type": role_data.get("primary_creature_type"),
+            }
+
+            # Reset stale flags — this is a fresh generation
+            profile["simulation_stale"] = False
+            profile["cards_changed_since_regen"] = 0
+            # Save
+            try:
+                from database.session import SessionLocal
+                save_db = SessionLocal()
+                save_deck = save_db.query(Deck).filter(Deck.id == deck_id).first()
+                save_deck.strategy_profile = profile
+                save_db.commit()
+                save_db.close()
+            except Exception as save_err:
+                print(f"[STRATEGY] Save error: {save_err}")
+
+            elapsed = round(time.time() - total_start, 1)
+
+            yield _sse_message({
+                "step": "complete",
+                "message": f"Strategy profile complete! ({elapsed}s)",
+                "progress": 100,
+                "stats": {
+                    "sim_tags_generated": len(sim_tags),
+                    "roles_classified": len(role_data.get("card_roles", [])),
+                    "impact_ratings": len(deduped),
+                    "simulation_games": sim_results.get("games_simulated", 0),
+                    "elapsed_seconds": elapsed,
+                }
+            })
+
+        except Exception as e:
+            import traceback
+            print(f"[STRATEGY STREAM ERROR] {str(e)}")
+            traceback.print_exc()
             yield _sse_message({
                 "step": "error",
-                "message": f"Strategy generation failed: {profile['error']}",
+                "message": f"Generation failed: {str(e)}",
                 "progress": 0,
             })
-            return
-
-        # Step 3: Launch impact batches
-        yield _sse_message({
-            "step": "impact",
-            "message": "Rating card impact scores...",
-            "progress": 45,
-        })
-
-        impact_batches = build_impact_batches(
-            deck_info=deck_info, deck_cards=cards, card_lookup=card_lookup,
-            analytics=analytics, role_data=role_data, profile=profile,
-        )
-
-        impact_futures = []
-        for system_prompt, user_msg in impact_batches:
-            future = loop.run_in_executor(
-                _executor,
-                lambda s=system_prompt, u=user_msg: _call_impact_batch(s, u)
-            )
-            impact_futures.append(future)
-
-        # Wait for all remaining tasks
-        all_remaining = impact_futures + sim_tag_futures
-        total_remaining = len(all_remaining)
-        done_count = 0
-
-        for coro in asyncio.as_completed(all_remaining):
-            await coro
-            done_count += 1
-            pct = 45 + int((done_count / total_remaining) * 40)
-            yield _sse_message({
-                "step": "batches",
-                "message": f"Processing AI batches ({done_count}/{total_remaining})...",
-                "progress": pct,
-            })
-
-        # Collect results
-        impact_results = [f.result() for f in impact_futures]
-        sim_tag_results = [f.result() for f in sim_tag_futures]
-
-        # Merge impact ratings
-        all_ratings = []
-        for batch_result in impact_results:
-            if batch_result and isinstance(batch_result, list):
-                all_ratings.extend(batch_result)
-
-        seen = set()
-        deduped = []
-        for rating in all_ratings:
-            name = rating.get("card_name", "").lower()
-            if name not in seen:
-                seen.add(name)
-                deduped.append(rating)
-        profile["card_impact_ratings"] = deduped
-
-        # Merge sim tags
-        sim_tags = {}
-        for batch_result in sim_tag_results:
-            if batch_result and isinstance(batch_result, dict):
-                sim_tags.update(batch_result)
-        profile["sim_tags"] = sim_tags
-
-        yield _sse_message({
-            "step": "summary",
-            "message": "Building deck summary...",
-            "progress": 88,
-        })
-
-        # Compact summary
-        commander_text = _get_commander_text(cards, card_lookup)
-        profile["deck_summary"] = _build_compact_summary(
-            deck_info=deck_info, analytics=analytics, role_data=role_data,
-            profile=profile, commander_text=commander_text,
-        )
-
-        # Step 4: Simulation
-        yield _sse_message({
-            "step": "simulation",
-            "message": "Running 500-game simulation...",
-            "progress": 90,
-        })
-
-        main_deck_cards = []
-        for card in cards:
-            if card.board != "main":
-                continue
-            card_data = card_lookup.get(card.scryfall_id)
-            if card_data:
-                main_deck_cards.append({"card_data": card_data, "quantity": card.quantity})
-
-        sim_results = {}
-        if main_deck_cards:
-            sim_results = run_simulation(
-                deck_cards=main_deck_cards, sim_tags=sim_tags, n_games=500, turns=10,
-            )
-            profile["cached_simulation"] = sim_results
-            color_health = compute_color_health(sim_results, analytics)
-            profile["color_health"] = color_health
-
-        yield _sse_message({
-            "step": "saving",
-            "message": "Saving profile to database...",
-            "progress": 95,
-        })
-
-        # Role data
-        profile["role_data"] = {
-            "role_distribution": role_data.get("role_distribution", {}),
-            "card_roles": role_data.get("card_roles", []),
-            "primary_creature_type": role_data.get("primary_creature_type"),
-        }
-
-        # Save
-        deck.strategy_profile = profile
-        db.commit()
-
-        elapsed = round(time.time() - total_start, 1)
-
-        yield _sse_message({
-            "step": "complete",
-            "message": f"Strategy profile complete! ({elapsed}s)",
-            "progress": 100,
-            "stats": {
-                "sim_tags_generated": len(sim_tags),
-                "roles_classified": len(role_data.get("card_roles", [])),
-                "impact_ratings": len(deduped),
-                "simulation_games": sim_results.get("games_simulated", 0),
-                "elapsed_seconds": elapsed,
-            }
-        })
 
     return StreamingResponse(
         generate(),

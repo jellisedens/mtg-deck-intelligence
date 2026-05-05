@@ -28,7 +28,7 @@ Respond with ONLY valid JSON:
         {{
             "card_name": "Card Name",
             "scryfall_id": "the-scryfall-uuid",
-            "reasoning": "Why this card is good - reference synergies with existing cards",
+            "reasoning": "1 sentence: why this card fits",
             "category": "ramp/removal/draw/creature/land/utility/etc",
             "priority": "high/medium/low",
             "budget_note": "$X.XX" or null

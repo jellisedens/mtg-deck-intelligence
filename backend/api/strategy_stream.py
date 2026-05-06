@@ -20,6 +20,7 @@ from services.analytics import compute_analytics
 from services.role_classifier import classify_deck_roles
 from services.strategy_profiler import (
     generate_base_profile,
+    generate_archetype_playbook,
     build_impact_batches,
     _call_impact_batch,
     _build_compact_summary,
@@ -213,6 +214,23 @@ async def stream_strategy_generation(
                     sim_tags.update(batch_result)
             profile["sim_tags"] = sim_tags
 
+
+            # Step 5: Archetype Playbook
+            yield _sse_message({
+                "step": "playbook",
+                "message": "Generating archetype playbook...",
+                "progress": 85,
+            })
+
+            playbook = await loop.run_in_executor(
+                _executor,
+                lambda: generate_archetype_playbook(
+                    deck_info=deck_info, deck_cards=cards, card_lookup=card_lookup,
+                    analytics=analytics, role_data=role_data, profile=profile,
+                )
+            )
+            profile["archetype_playbook"] = playbook
+            
             yield _sse_message({
                 "step": "summary",
                 "message": "Building deck summary...",

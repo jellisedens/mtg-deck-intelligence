@@ -7,6 +7,7 @@ import json
 from services.deck_context import build_simulation_context
 from services.cut_analyzer import build_cut_context
 from services.mana_analyzer import format_color_health_for_prompt
+from services.mtg_knowledge import build_knowledge_context
 
 
 def build_suggest_prompt(prompt: str, plan: dict, search_results: list,
@@ -23,25 +24,24 @@ Analyze the search results and recommend the best cards for this deck.
 
 Respond with ONLY valid JSON:
 {{
-    "summary": "1-2 sentence deck diagnosis with specific numbers, then overview recommendations",
-    "suggestions": [
-        {{
-            "card_name": "Card Name",
-            "scryfall_id": "the-scryfall-uuid",
-            "reasoning": "1 sentence: why this card fits",
-            "category": "ramp/removal/draw/creature/land/utility/etc",
-            "priority": "high/medium/low",
-            "budget_note": "$X.XX" or null
-        }}
+    "summary": "1-2 sentence deck diagnosis",
+    "picks": [
+        ["Exact Card Name", "scryfall-uuid", "category", "1 sentence reason"]
     ],
-    "cuts": [],
-    "strategy_notes": "Overall strategic advice"
+    "strategy_notes": "1 sentence strategic advice"
 }}
+
+The picks array should contain {plan.get('max_results', 8)} entries. Each entry is an array of exactly 4 strings:
+[card_name, scryfall_id, category, brief_reason]
+Keep reasons under 15 words. Categories: ramp/removal/draw/creature/land/utility/protection/tutor
 
 Rules:
 - Only suggest cards from the search results with exact scryfall_id
 - Order by priority (best first)
-- Prefer cards with lower EDHREC rank (more popular = more proven)
+- PRIORITIZE cards that directly synergize with the deck's strategy, creature type, or commander over generic staples
+- RAMP means mana acceleration — cards that put you AHEAD on mana (extra mana sources, cost reducers, extra land drops). Lands that only fix colors (Evolving Wilds, Command Tower, fetch lands) are NOT ramp — they are mana fixing. Do NOT suggest lands as ramp unless they actually produce extra mana beyond one-per-turn.
+- A card that specifically mentions or interacts with the deck's creature type is ALWAYS better than a generic card of the same role
+- Generic staples (Sol Ring, Arcane Signet) are acceptable as fallback suggestions but should not dominate when deck-specific options exist
 - Reference specific synergies with cards already in the deck
 - If deck is permanent-heavy, prefer creature-based draw/ramp/removal
 - If deck is spell-heavy, prefer instant/sorcery-based options
@@ -52,6 +52,8 @@ Rules:
 - If USER PREFERENCES specify color constraints, ONLY suggest cards in the allowed colors
 - If USER PREFERENCES specify card type preferences, prioritize those types
 - USER PREFERENCES always take priority over analytical recommendations
+
+{_get_knowledge_for_suggest(deck_info)}
 
 {synergy_rules}
 {strategic_context}"""
@@ -372,3 +374,48 @@ def _get_user_preferences(deck_info: dict) -> str:
         lines.append(f"- Notes: {preferences['other_notes']}")
 
     return "\n".join(lines)
+
+def _get_knowledge_for_suggest(deck_info: dict) -> str:
+    """Build compact knowledge context for suggest prompts."""
+    if not deck_info:
+        return ""
+    profile = deck_info.get("strategy_profile") or {}
+    
+    # Static knowledge
+    knowledge = build_knowledge_context(
+        format_name=deck_info.get("format", "commander"),
+        archetype=profile.get("primary_strategy"),
+        creature_type=profile.get("primary_creature_type"),
+    )
+    
+    # Per-deck playbook
+    playbook = profile.get("archetype_playbook", {})
+    if playbook:
+        identity = playbook.get("identity", "")
+        if identity:
+            knowledge += f"\n\nDECK IDENTITY: {identity}"
+        
+        category_guidance = playbook.get("category_guidance", {})
+        if category_guidance:
+            knowledge += "\n\nDECK-SPECIFIC CATEGORY GUIDANCE:"
+            for cat, guidance in category_guidance.items():
+                priorities = guidance.get("priorities", [])
+                avoid = guidance.get("avoid", "")
+                if priorities:
+                    knowledge += f"\n  {cat.upper()}:"
+                    for p in priorities[:3]:
+                        knowledge += f"\n    • {p}"
+                    if avoid:
+                        knowledge += f"\n    ✗ Avoid: {avoid}"
+        
+        unique = playbook.get("unique_categories", {})
+        if unique:
+            knowledge += "\n\nDECK-SPECIFIC CATEGORIES:"
+            for cat, guidance in unique.items():
+                desc = guidance.get("description", "")
+                priorities = guidance.get("priorities", [])
+                knowledge += f"\n  {cat.upper()}: {desc}"
+                for p in priorities[:3]:
+                    knowledge += f"\n    • {p}"
+    
+    return knowledge

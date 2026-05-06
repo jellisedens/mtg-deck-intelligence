@@ -10,6 +10,7 @@ import time
 import asyncio
 import logging
 from openai import OpenAI
+from services.mtg_knowledge import build_knowledge_context, SCRYFALL_SYNTAX_GUIDE
 from services.scryfall import scryfall_service
 from services.analytics import compute_analytics
 from services.role_classifier import classify_deck_roles
@@ -26,6 +27,105 @@ MODEL = "gpt-4o-mini"
 
 logger = logging.getLogger(__name__)
 
+def _extract_requested_count(prompt: str) -> int | None:
+    """Extract explicit count from prompt like 'suggest 10 cards' or 'show me all'."""
+    prompt_lower = prompt.lower()
+    count_match = re.search(r'\b(\d+)\s+\w+\s*(card|creature|spell|suggestion)', prompt_lower)
+    if count_match:
+        return min(int(count_match.group(1)), 20)
+    if any(phrase in prompt_lower for phrase in ["all ", "every ", "as many as"]):
+        return 20
+    return None
+
+def _expand_compact_suggestions(result: dict) -> dict:
+    """Transform compact AI picks format into full suggestions format."""
+    if "picks" not in result:
+        return result  # Already in full format or error
+    
+    suggestions = []
+    for pick in result.get("picks", []):
+        if not isinstance(pick, list) or len(pick) < 2:
+            continue
+        card_name = pick[0] if len(pick) > 0 else ""
+        scryfall_id = pick[1] if len(pick) > 1 else ""
+        category = pick[2] if len(pick) > 2 else "utility"
+        reasoning = pick[3] if len(pick) > 3 else ""
+        
+        suggestions.append({
+            "card_name": card_name,
+            "scryfall_id": scryfall_id,
+            "reasoning": reasoning,
+            "category": category,
+            "priority": None,
+            "budget_note": None,
+        })
+    
+    result["suggestions"] = suggestions
+    result.pop("picks", None)
+    result.setdefault("cuts", [])
+    return result
+
+def _build_representative_sample(all_results: list, queries: list, max_cards: int) -> list:
+    """
+    Build a representative sample ensuring results from each query are included.
+    Prevents niche/specific query results from being drowned by high-volume generic queries.
+    Each query gets a fair share of slots, filled by EDHREC rank within that query's results.
+    """
+    if not queries or len(queries) <= 1:
+        return all_results[:max_cards]
+    
+    # We don't track which result came from which query in the current flow,
+    # so re-run a lightweight check: for each result, test which queries it likely matched
+    # This is approximate but effective
+    per_query_slots = max(2, max_cards // len(queries))
+    selected = []
+    seen_ids = set()
+    
+    # First pass: take top results from each query position
+    # Since results are sorted by EDHREC rank globally, earlier results are more popular
+    # We want to ensure later queries (often more specific) get representation
+    
+    # Split results into "early" (from broad queries, high volume) and "late" (from specific queries, low volume)
+    # Heuristic: cards with very low EDHREC rank (<1000) are likely generic staples
+    # Cards with higher EDHREC rank but still in results are likely from specific queries
+    
+    # Simpler approach: take top N by EDHREC, but also include some from the tail
+    # that have characteristics matching the specific queries
+    top_results = all_results[:max_cards]
+    
+    # Also grab cards from positions max_cards to max_cards*3 that might be specific query hits
+    extended_pool = all_results[max_cards:] if len(all_results) > max_cards else []
+    
+    # Look for cards in the extended pool whose oracle text or type line 
+    # contains terms from the later (more specific) queries
+    if extended_pool and len(queries) >= 2:
+        # Extract key terms from the last 2 queries (typically the most specific)
+        specific_terms = set()
+        for q in queries[:2]:  # first queries are now the specific ones (planner puts them first)
+            for term in ["dragon", "elf", "goblin", "zombie", "angel", "demon", "vampire",
+                         "wizard", "tribal", "otag"]:
+                if term in q.lower():
+                    specific_terms.add(term)
+        
+        if specific_terms:
+            specific_hits = []
+            for card in extended_pool:
+                card_text = (card.get("oracle_text", "") + " " + card.get("type_line", "")).lower()
+                if any(term in card_text for term in specific_terms):
+                    specific_hits.append(card)
+            
+            # Replace some generic results with specific hits
+            if specific_hits:
+                # Keep top half from EDHREC ranking, replace bottom half with specific hits
+                half = max_cards // 2
+                top_half = top_results[:half]
+                specific_portion = specific_hits[:max_cards - half]
+                # Fill remaining with generic if needed
+                remaining = max_cards - len(top_half) - len(specific_portion)
+                generic_fill = top_results[half:half + remaining] if remaining > 0 else []
+                return top_half + specific_portion + generic_fill
+    
+    return top_results
 
 async def get_suggestions(prompt: str, deck_cards: list = None, deck_info: dict = None,
                           simulation_data: dict = None, card_lookup: dict = None) -> dict:
@@ -128,19 +228,21 @@ async def _handle_suggest(prompt: str, deck_cards: list, deck_info: dict,
     # Try direct query bypass first (skips ~15s AI planning call)
     plan = _try_direct_queries(prompt, deck_info)
 
-    # Build deck context (needed for main AI call regardless)
-    deck_context = None
-    if deck_cards:
-        deck_context = build_deck_context(deck_cards, deck_info, analytics, card_lookup, role_data)
-
     if plan:
         print(f"[AI] Direct bypass: {plan['reasoning']} ({time.time() - t_plan:.1f}s)")
+        print(f"[AI] Queries: {plan.get('scryfall_queries', [])}")
+        deck_context = None  # Not needed — bypass skips AI planner
     else:
+        # Build deck context (only needed for AI planner)
+        deck_context = None
+        if deck_cards:
+            deck_context = build_deck_context(deck_cards, deck_info, analytics, card_lookup, role_data)
         # Fall through to AI planner
-        plan = _get_ai_plan(prompt, deck_context)
+        plan = _get_ai_plan(prompt, deck_context, deck_info)
         if "error" in plan:
             return plan
         print(f"[AI] Search plan via AI ({time.time() - t_plan:.1f}s)")
+        print(f"[AI] Queries: {plan.get('scryfall_queries', [])}")
 
     # Execute searches
     existing_cards = set()
@@ -161,9 +263,14 @@ async def _handle_suggest(prompt: str, deck_cards: list, deck_info: dict,
         print(f"[AI] Broadened to {len(search_results)} ({time.time() - t_broaden:.1f}s)")
 
     # Build focused prompt — scale results to requested count
-    max_results = plan.get("max_results", 10)
+    # Default to 5 unless user explicitly asked for more
+    requested = _extract_requested_count(prompt)
+    max_results = requested if requested else 8
+    plan["max_results"] = max_results  # override planner's default of 10
     max_cards = min(max_results + 10, 30)  # give AI some extra options to choose from
-    trimmed_results = search_results[:max_cards]
+    # Build a representative sample — take top results from EACH query
+    # so specific/niche query results aren't drowned by generic ones
+    trimmed_results = _build_representative_sample(search_results, plan.get("scryfall_queries", []), max_cards)
     
     # Slim card data for the AI prompt to reduce token count
     slim_results = []
@@ -195,6 +302,7 @@ async def _handle_suggest(prompt: str, deck_cards: list, deck_info: dict,
     result = _call_ai(system, user_msg)
     print(f"[AI] Main AI call ({time.time() - t_ai:.1f}s)")
 
+    result = _expand_compact_suggestions(result)
     result = _verify_suggestions(result, search_results)
     result.setdefault("debug", {})
     result["debug"]["scryfall_queries"] = plan.get("scryfall_queries", [])
@@ -255,7 +363,7 @@ async def _handle_swap(prompt: str, deck_cards: list, deck_info: dict,
     if deck_cards:
         deck_context = build_deck_context(deck_cards, deck_info, analytics, card_lookup, role_data)
 
-    plan = _get_ai_plan(prompt, deck_context)
+    plan = _get_ai_plan(prompt, deck_context, deck_info)
     if "error" in plan:
         return plan
     print(f"[AI] Swap plan ({time.time() - t_plan:.1f}s)")
@@ -315,8 +423,16 @@ def _call_ai(system: str, user_msg: str) -> dict:
         )
         content = response.choices[0].message.content.strip()
         content = content.replace("```json", "").replace("```", "").strip()
-        return json.loads(content)
+        try:
+            return json.loads(content)
+        except json.JSONDecodeError:
+            # Try to fix common JSON issues
+            # Remove trailing commas before ] or }
+            content = re.sub(r',\s*([}\]])', r'\1', content)
+            # Try again
+            return json.loads(content)
     except json.JSONDecodeError as e:
+        print(f"[AI] JSON parse failed. Raw content:\n{content[:500]}")
         return {"error": "ai_parse_error", "details": f"Failed to parse AI response: {str(e)}"}
     except Exception as e:
         return {"error": "ai_error", "details": str(e)}
@@ -746,34 +862,71 @@ def _try_direct_queries(prompt: str, deck_info: dict = None) -> dict | None:
     return None
 
 
-def _get_ai_plan(prompt: str, deck_context: str = None) -> dict:
+def _get_ai_plan(prompt: str, deck_context: str = None, deck_info: dict = None) -> dict:
     """Ask AI to create a Scryfall search plan."""
-    system = f"""You are an expert Magic: The Gathering deck building advisor.
-Interpret the user's request and create a search plan.
+    
+    # Build knowledge context from deck info
+    knowledge = ""
+    if deck_info:
+        profile = deck_info.get("strategy_profile") or {}
+        knowledge = build_knowledge_context(
+            format_name=deck_info.get("format", "commander"),
+            archetype=profile.get("primary_strategy"),
+            creature_type=profile.get("primary_creature_type"),
+        )
+    
+    system = f"""You are an expert Magic: The Gathering Scryfall query builder.
+Interpret the user's request and create targeted Scryfall search queries.
 
 Respond with ONLY valid JSON:
 {{
-    "mode": "search" or "advisor",
-    "reasoning": "brief explanation",
-    "scryfall_queries": ["query1", "query2"],
-    "needs_deck_context": true/false,
+    "mode": "search",
+    "reasoning": "brief explanation of your search strategy",
+    "scryfall_queries": ["query1", "query2", "query3"],
     "max_results": 10
 }}
+
+{SCRYFALL_SYNTAX_GUIDE}
 
 {GLOSSARY}
 
 {REPLACEMENT_GUIDE}
 
-Query rules:
-- For commander, use id<= (color identity) not c: (card color)
-- Multiple focused queries > one broad query
-- Always include f:commander when format is known
-- Generate 3-4 queries minimum covering different subcategories
+{knowledge}
+
+CRITICAL RULES:
+- Generate 4-6 queries covering different angles
+- At least one query should be broad enough to GUARANTEE results
+- For Commander, ALWAYS use id<= for color identity and f:commander
+- NEVER generate queries so narrow they return 0 results
+- The last query should always be a simple broad fallback
+- PRIORITIZATION: If the user's request mentions a specific creature type, theme, or synergy, the MAJORITY of queries (3-4 out of 6) should target that specific angle. Only 1-2 queries should be generic fallbacks.
+- Example: "ramp for dragons" should generate 4 dragon-specific ramp queries (otag:tribal-dragon, o:dragon o:cost o:less, t:dragon o:add, o:dragon o:mana) and only 1-2 generic ramp queries as fallback.
+- Example: "removal" with no qualifier should generate broad removal queries across all subcategories.
+- The user's specificity determines the query mix — specific request = specific queries.
 """
 
     user_msg = f"User request: {prompt}"
     if deck_context:
         user_msg += f"\n\nDeck context:\n{deck_context}"
+    
+    # Include playbook scryfall hints if available
+    if deck_info:
+        playbook = (deck_info.get("strategy_profile") or {}).get("archetype_playbook", {})
+        category_guidance = playbook.get("category_guidance", {})
+        if category_guidance:
+            hint_lines = ["Deck-specific Scryfall query hints:"]
+            for cat, guidance in category_guidance.items():
+                hints = guidance.get("scryfall_hints", [])
+                if hints:
+                    hint_lines.append(f"  {cat}: {', '.join(hints)}")
+            # Also include unique categories
+            for cat, guidance in playbook.get("unique_categories", {}).items():
+                hints = guidance.get("scryfall_hints", [])
+                if hints:
+                    hint_lines.append(f"  {cat}: {', '.join(hints)}")
+            if len(hint_lines) > 1:
+                user_msg += "\n\n" + "\n".join(hint_lines)
 
     try:
         response = client.chat.completions.create(
@@ -842,7 +995,6 @@ async def _execute_searches(queries: list, exclude_cards: set = None) -> list:
     """Execute Scryfall searches in parallel, filter duplicates, sort by EDHREC rank."""
     exclude = exclude_cards or set()
 
-    # Run all queries concurrently
     t_start = time.time()
     tasks = [scryfall_service.search_cards_raw(q) for q in queries]
     results = await asyncio.gather(*tasks, return_exceptions=True)

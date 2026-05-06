@@ -10,6 +10,7 @@ from the strategy route handler.
 import os
 import json
 from openai import OpenAI
+from services.mtg_knowledge import get_archetype_template, SCRYFALL_SYNTAX_GUIDE
 
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 MODEL = "gpt-4o-mini"
@@ -227,6 +228,175 @@ def _call_impact_batch(system: str, user_msg: str) -> list:
         print(f"Impact rating batch failed: {e}")
         return []
 
+def generate_archetype_playbook(deck_info: dict, deck_cards: list,
+                                 card_lookup: dict, analytics: dict,
+                                 role_data: dict, profile: dict) -> dict:
+    """
+    Generate a per-deck archetype playbook.
+    This tells the AI system what each card category should look like
+    for THIS specific deck's strategy and playstyle.
+    
+    One AI call, runs after base profile is generated.
+    """
+    commander_text = _get_commander_text(deck_cards, card_lookup)
+    
+    # Build a focused context from the base profile
+    strategy = profile.get("primary_strategy", "Unknown")
+    win_conditions = profile.get("win_conditions", [])
+    key_synergies = profile.get("key_synergies", [])
+    weaknesses = profile.get("weaknesses", [])
+    role_needs = profile.get("role_needs", {})
+    role_dist = role_data.get("role_distribution", {})
+    primary_type = role_data.get("primary_creature_type", "None")
+    
+    # Summarize key synergies compactly
+    synergy_lines = []
+    for syn in key_synergies[:5]:
+        cards = syn.get("cards", [])
+        desc = syn.get("description", "")
+        synergy_lines.append(f"  {' + '.join(cards)}: {desc}")
+    
+    # Include archetype template if available
+    archetype_context = ""
+    template = get_archetype_template(strategy)
+    if template:
+        archetype_context = f"""
+Reference archetype: {template['description']}
+Key needs for this archetype:
+{chr(10).join('  - ' + need for need in template['key_needs'])}
+Common pitfalls:
+{chr(10).join('  - ' + pitfall for pitfall in template['common_pitfalls'])}
+Scryfall patterns for this archetype:
+{chr(10).join(f'  {role}: {pattern}' for role, pattern in template.get('scryfall_patterns', {}).items())}
+"""
+    
+    # Build creature type specific context
+    creature_context = ""
+    if primary_type and primary_type != "None":
+        creature_context = f"""
+This deck is built around {primary_type} creatures specifically.
+When generating scryfall_hints, use these patterns:
+  - otag:tribal-{primary_type.lower()} — finds all {primary_type} tribal support
+  - otag:tribal-{primary_type.lower()} otag:ramp — {primary_type}-specific ramp
+  - otag:tribal-{primary_type.lower()} otag:draw — {primary_type}-specific draw
+  - o:"{primary_type}" o:"cost" o:"less" — cost reducers for {primary_type}
+  - t:{primary_type.lower()} o:"add" — {primary_type}s that produce mana
+  - o:"{primary_type}" o:"draw" — draw tied to {primary_type}s
+"""
+
+    system = """You are an expert Magic: The Gathering deck strategist.
+Given a deck's strategy, commander, and composition, generate a PLAYBOOK that defines
+what each card category should look like for THIS SPECIFIC DECK.
+
+This is NOT generic advice. Every recommendation should reference this deck's specific
+commander, strategy, synergies, or card interactions.
+
+Respond with ONLY valid JSON:
+{
+    "identity": "1 sentence: what this deck IS and how it wins",
+    "category_guidance": {
+        "ramp": {
+            "priorities": ["most important type of ramp for this deck first", "second priority", ...],
+            "scryfall_hints": ["scryfall query that finds ideal ramp for this deck", ...],
+            "avoid": "what type of ramp does NOT fit this deck"
+        },
+        "card_draw": {
+            "priorities": ["best draw type for this deck's playstyle", ...],
+            "scryfall_hints": ["scryfall query for ideal draw", ...],
+            "avoid": "draw types that don't fit"
+        },
+        "removal": {
+            "priorities": ["removal that fits this deck's game plan", ...],
+            "scryfall_hints": ["scryfall query for ideal removal", ...],
+            "avoid": "removal types to skip"
+        },
+        "protection": {
+            "priorities": ["what this deck most needs to protect and how", ...],
+            "scryfall_hints": ["scryfall query", ...],
+            "avoid": "protection that doesn't fit"
+        },
+        "win_condition": {
+            "priorities": ["primary win path", "backup win path", ...],
+            "scryfall_hints": ["scryfall query for finishers", ...],
+            "avoid": "win conditions that conflict with the strategy"
+        }
+    },
+    "unique_categories": {
+        "category_name": {
+            "description": "what this deck-specific category is",
+            "priorities": ["what to look for", ...],
+            "scryfall_hints": ["query", ...]
+        }
+    }
+}
+
+SCRYFALL SYNTAX REFERENCE:
+- otag:tribal-dragon — dragon tribal support cards (otag:tribal-elf for elves, etc.)
+- Combine tags: otag:tribal-dragon otag:ramp — dragon-specific ramp
+- o:"destroy target" — oracle text contains exact phrase
+- o:dragon o:cost o:less — oracle text contains all words (not necessarily together)
+- t:creature, t:artifact, t:instant, t:sorcery, t:enchantment — card type
+- t:dragon — creature subtype
+- id<=WUBRG — color identity for Commander
+- f:commander — legal in Commander format
+- cmc<=3 — converted mana cost
+- Example queries: otag:tribal-dragon otag:ramp f:commander, o:"dragon" o:"cost" o:"less" f:commander id<=WUBRG, t:dragon o:"add" f:commander
+
+RULES:
+- priorities should be ordered most important first
+- scryfall_hints MUST use valid Scryfall syntax as shown above
+- ALWAYS use otag: for tribal queries when applicable
+- ALWAYS include f:commander and id<= in hints for Commander decks
+- For Commander format, use id<= for color identity and f:commander
+- unique_categories captures anything specific to this deck's strategy that doesn't fit
+  the standard categories (e.g., "blink targets" for a blink deck, "sacrifice fodder" for
+  aristocrats, "storm enablers" for spellslinger, "tribal lords" for tribal)
+- Keep each priority to 1 sentence
+- Generate 3-5 priorities and 2-4 scryfall_hints per category
+- The avoid field should explain what generic options DON'T work for this deck
+- priorities MUST name specific cards or specific mechanics — NOT generic advice like "focus on ramp"
+- Example good priority: "Dragon cost reducers like Dragonspeaker Shaman and Urza's Incubator that make all Dragons cheaper"
+- Example bad priority: "Include ramp that helps cast Dragons earlier"
+"""
+
+    user_msg = f"""{commander_text}
+
+Strategy: {strategy}
+Win conditions: {json.dumps(win_conditions)}
+Weaknesses: {json.dumps(weaknesses)}
+Primary creature type: {primary_type}
+Average CMC: {analytics.get('average_cmc', 0)}
+Format: {deck_info.get('format', 'commander')}
+Color identity: {json.dumps(analytics.get('deck_identity', {}).get('colors', []))}
+
+Key synergies:
+{chr(10).join(synergy_lines) if synergy_lines else "  None identified"}
+
+Current role distribution:
+{json.dumps(role_dist, indent=2)}
+
+Role assessment:
+  Needs more: {json.dumps(role_needs.get('needs_more', []))}
+  Has enough: {json.dumps(role_needs.get('has_enough', []))}
+  Over-saturated: {json.dumps(role_needs.get('over_saturated', []))}
+{archetype_context}
+{creature_context}"""
+
+    try:
+        response = client.chat.completions.create(
+            model=MODEL,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user_msg},
+            ],
+            temperature=0.3,
+        )
+        content = response.choices[0].message.content.strip()
+        content = content.replace("```json", "").replace("```", "").strip()
+        return json.loads(content)
+    except Exception as e:
+        print(f"Playbook generation failed: {e}")
+        return {}
 
 def _get_commander_text(deck_cards, card_lookup):
     """Extract commander text for prompts."""

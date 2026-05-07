@@ -2,7 +2,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
-
+from services.deck_intelligence import log_card_added, log_card_removed
 from database.session import get_db
 from models.user import User
 from models.deck import Deck
@@ -334,6 +334,11 @@ def add_card(
     if deck.strategy_profile is not None:
         flag_modified(deck, "strategy_profile")
     db.commit()
+    # Log to deck intelligence (separate commit to not interfere with card add)
+    try:
+        log_card_added(deck, db, request.card_name, source="manual")
+    except Exception:
+        pass  # Intelligence logging is non-critical
     db.refresh(card)
     return card
 
@@ -431,3 +436,7 @@ def remove_card(
     if deck.strategy_profile is not None:
         flag_modified(deck, "strategy_profile")
     db.commit()
+    try:
+        log_card_removed(deck, db, card_name)
+    except Exception:
+        pass

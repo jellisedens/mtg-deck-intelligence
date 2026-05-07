@@ -127,8 +127,140 @@ def _build_representative_sample(all_results: list, queries: list, max_cards: in
     
     return top_results
 
+def _apply_playbook_filter(results: list, prompt: str, deck_info: dict) -> list:
+    """Filter results based on playbook avoid guidance for the matched category."""
+    if not deck_info:
+        return results
+    
+    playbook = (deck_info.get("strategy_profile") or {}).get("archetype_playbook", {})
+    if not playbook:
+        return results
+    
+    # Determine which category this prompt maps to
+    prompt_lower = prompt.lower()
+    category_keywords = {
+        "ramp": ["ramp", "mana", "accelerat"],
+        "card_draw": ["draw", "card advantage", "card draw"],
+        "removal": ["removal", "remove", "destroy", "exile", "kill"],
+        "protection": ["protect", "hexproof", "indestructible", "counter"],
+    }
+    
+    matched_category = None
+    for cat, keywords in category_keywords.items():
+        if any(kw in prompt_lower for kw in keywords):
+            matched_category = cat
+            break
+    
+    if not matched_category:
+        return results
+    
+    guidance = playbook.get("category_guidance", {}).get(matched_category, {})
+    avoid_text = guidance.get("avoid", "").lower()
+    
+    if not avoid_text:
+        return results
+    
+    # Parse avoid text for type-based filtering
+    avoid_types = set()
+    if "creature" in avoid_text and ("creature-based" in avoid_text or "creature" in avoid_text):
+        avoid_types.add("Creature")
+    if "enchantment" in avoid_text and ("enchantment-based" in avoid_text or "enchantment" in avoid_text):
+        avoid_types.add("Enchantment")
+    if "sorcery" in avoid_text:
+        avoid_types.add("Sorcery")
+    if "instant" in avoid_text:
+        avoid_types.add("Instant")
+    if "artifact" in avoid_text:
+        avoid_types.add("Artifact")
+    
+    if not avoid_types:
+        return results
+    
+    # Filter but keep at least half the results (don't over-filter)
+    filtered = []
+    removed = []
+    for card in results:
+        type_line = card.get("type_line", "")
+        should_remove = any(t in type_line for t in avoid_types)
+        if should_remove:
+            removed.append(card)
+        else:
+            filtered.append(card)
+    
+    # If filtering removed too many, add some back
+    min_results = max(len(results) // 2, 8)
+    if len(filtered) < min_results:
+        filtered.extend(removed[:min_results - len(filtered)])
+    
+    return filtered
+
+def _apply_playbook_filter(results: list, prompt: str, deck_info: dict) -> list:
+    """Filter results based on playbook avoid guidance for the matched category."""
+    if not deck_info:
+        return results
+    
+    playbook = (deck_info.get("strategy_profile") or {}).get("archetype_playbook", {})
+    if not playbook:
+        return results
+    
+    prompt_lower = prompt.lower()
+    category_keywords = {
+        "ramp": ["ramp", "mana", "accelerat"],
+        "card_draw": ["draw", "card advantage", "card draw"],
+        "removal": ["removal", "remove", "destroy", "exile", "kill"],
+        "protection": ["protect", "hexproof", "indestructible", "counter"],
+    }
+    
+    matched_category = None
+    for cat, keywords in category_keywords.items():
+        if any(kw in prompt_lower for kw in keywords):
+            matched_category = cat
+            break
+    
+    if not matched_category:
+        return results
+    
+    guidance = playbook.get("category_guidance", {}).get(matched_category, {})
+    avoid_text = guidance.get("avoid", "").lower()
+    
+    if not avoid_text:
+        return results
+    
+    avoid_types = set()
+    if "creature" in avoid_text:
+        avoid_types.add("Creature")
+    if "enchantment" in avoid_text:
+        avoid_types.add("Enchantment")
+    if "sorcery" in avoid_text:
+        avoid_types.add("Sorcery")
+    if "instant" in avoid_text:
+        avoid_types.add("Instant")
+    if "artifact" in avoid_text:
+        avoid_types.add("Artifact")
+    
+    if not avoid_types:
+        return results
+    
+    filtered = []
+    removed = []
+    for card in results:
+        type_line = card.get("type_line", "")
+        should_remove = any(t in type_line for t in avoid_types)
+        if should_remove:
+            removed.append(card)
+        else:
+            filtered.append(card)
+    
+    # Keep at least half the results
+    min_results = max(len(results) // 2, 8)
+    if len(filtered) < min_results:
+        filtered.extend(removed[:min_results - len(filtered)])
+    
+    return filtered
+
 async def get_suggestions(prompt: str, deck_cards: list = None, deck_info: dict = None,
-                          simulation_data: dict = None, card_lookup: dict = None) -> dict:
+                          simulation_data: dict = None, card_lookup: dict = None,
+                          conversation_context: list = None) -> dict:
     """
     Main entry point for AI suggestions.
     Classifies intent and routes to the appropriate prompt builder.
@@ -199,7 +331,7 @@ async def get_suggestions(prompt: str, deck_cards: list = None, deck_info: dict 
     else:
         result = await _handle_suggest(
             prompt, deck_cards, deck_info, simulation_data,
-            card_lookup, role_data, analytics,
+            card_lookup, role_data, analytics, conversation_context,
         )
     print(f"[AI] Handler complete ({time.time() - t_route:.1f}s)")
     print(f"[AI] Total: {time.time() - t_start:.1f}s")
@@ -221,7 +353,8 @@ async def get_suggestions(prompt: str, deck_cards: list = None, deck_info: dict 
 
 async def _handle_suggest(prompt: str, deck_cards: list, deck_info: dict,
                           simulation_data: dict, card_lookup: dict,
-                          role_data: dict, analytics: dict) -> dict:
+                          role_data: dict, analytics: dict,
+                          conversation_context: list = None) -> dict:
     """Handle card suggestion requests."""
     t_plan = time.time()
 
@@ -272,6 +405,9 @@ async def _handle_suggest(prompt: str, deck_cards: list, deck_info: dict,
     # so specific/niche query results aren't drowned by generic ones
     trimmed_results = _build_representative_sample(search_results, plan.get("scryfall_queries", []), max_cards)
     
+    # Apply playbook avoid filter
+    trimmed_results = _apply_playbook_filter(trimmed_results, prompt, deck_info)
+    
     # Slim card data for the AI prompt to reduce token count
     slim_results = []
     for card in trimmed_results:
@@ -294,6 +430,7 @@ async def _handle_suggest(prompt: str, deck_cards: list, deck_info: dict,
         simulation_data=simulation_data,
         synergy_rules=SYNERGY_RULES,
         strategic_context=STRATEGIC_CONTEXT,
+        conversation_context=conversation_context,
     )
 
     # Call AI and process
@@ -570,7 +707,10 @@ def _try_direct_queries(prompt: str, deck_info: dict = None) -> dict | None:
         profile = deck_info.get("strategy_profile") or {}
         colors = profile.get("color_identity", [])
         if colors:
-            color_filter = f" id<=({''.join(colors)})"
+            # Scryfall expects WUBRG order
+            wubrg_order = "WUBRG"
+            sorted_colors = "".join(c for c in wubrg_order if c in colors)
+            color_filter = f" id<={sorted_colors}"
     
     format_filter = f" f:{fmt}"
     base = format_filter + color_filter

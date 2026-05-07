@@ -61,6 +61,7 @@ async def suggest_cards(
         deck_info=deck_info,
         simulation_data=simulation_data,
         card_lookup=card_lookup,
+        conversation_context=request.conversation_context,
     )
 
     if "error" in result:

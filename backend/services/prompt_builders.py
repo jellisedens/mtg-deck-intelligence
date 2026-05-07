@@ -12,7 +12,8 @@ from services.mtg_knowledge import build_knowledge_context
 
 def build_suggest_prompt(prompt: str, plan: dict, search_results: list,
                          deck_info: dict = None, simulation_data: dict = None,
-                         synergy_rules: str = "", strategic_context: str = "") -> tuple:
+                         synergy_rules: str = "", strategic_context: str = "",
+                         conversation_context: list = None) -> tuple:
     """
     Build prompt for card suggestions. Heavy on search results, light on deck details.
     Returns (system_prompt, user_message).
@@ -86,7 +87,22 @@ Rules:
         if card.get("oracle_text"):
             user_msg += f"  Text: {card['oracle_text'][:150]}\n"
 
-    user_msg += f"\nProvide {max_results} suggestions."
+    # Conversation context
+    if conversation_context and len(conversation_context) > 0:
+        user_msg += "\n\nPrior conversation (most recent last):\n"
+        for exchange in conversation_context[-5:]:  # last 5 exchanges
+            role = exchange.get("role", "")
+            content = exchange.get("content", "")
+            if role == "user":
+                user_msg += f"  User: {content}\n"
+            elif role == "ai":
+                cards = exchange.get("cards_suggested", [])
+                accepted = exchange.get("cards_accepted", [])
+                if cards:
+                    user_msg += f"  AI suggested: {', '.join(cards[:5])}\n"
+                if accepted:
+                    user_msg += f"  User added: {', '.join(accepted)}\n"
+        user_msg += "  Use this context to avoid repeating suggestions and to understand user preferences.\n"
 
     return system, user_msg
 
@@ -406,7 +422,7 @@ def _get_knowledge_for_suggest(deck_info: dict) -> str:
                     for p in priorities[:3]:
                         knowledge += f"\n    • {p}"
                     if avoid:
-                        knowledge += f"\n    ✗ Avoid: {avoid}"
+                        knowledge += f"\n    ✗ AVOID (do NOT suggest these): {avoid}"
         
         unique = playbook.get("unique_categories", {})
         if unique:

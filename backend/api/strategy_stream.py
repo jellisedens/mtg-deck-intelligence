@@ -10,7 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
-
+from services.deck_intelligence import seed_from_strategy_profile
 from database.session import get_db
 from models.user import User
 from models.deck import Deck
@@ -25,6 +25,7 @@ from services.strategy_profiler import (
     _call_impact_batch,
     _build_compact_summary,
     _get_commander_text,
+    _get_color_identity_letters,
 )
 from services.mana_analyzer import compute_color_health
 from simulation.sim_tags import build_sim_tag_batches, _call_sim_tag_batch
@@ -280,6 +281,9 @@ async def stream_strategy_generation(
                 "card_roles": role_data.get("card_roles", []),
                 "primary_creature_type": role_data.get("primary_creature_type"),
             }
+            
+            # Store color identity for query filtering
+            profile["color_identity"] = _get_color_identity_letters(cards, card_lookup)
 
             # Reset stale flags — this is a fresh generation
             profile["simulation_stale"] = False
@@ -291,6 +295,8 @@ async def stream_strategy_generation(
                 save_deck = save_db.query(Deck).filter(Deck.id == deck_id).first()
                 save_deck.strategy_profile = profile
                 save_db.commit()
+                # Seed intelligence from the new profile
+                seed_from_strategy_profile(save_deck, save_db)
                 save_db.close()
             except Exception as save_err:
                 print(f"[STRATEGY] Save error: {save_err}")

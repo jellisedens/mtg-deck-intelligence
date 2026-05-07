@@ -6,6 +6,7 @@ from uuid import UUID
 class SuggestRequest(BaseModel):
     prompt: str
     deck_id: Optional[UUID] = None
+    conversation_context: Optional[list[dict]] = None
 
 
 class CardSuggestion(BaseModel):

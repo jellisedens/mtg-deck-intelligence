@@ -15,6 +15,14 @@ from services.mtg_knowledge import get_archetype_template, SCRYFALL_SYNTAX_GUIDE
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 MODEL = "gpt-4o-mini"
 
+def _get_color_identity_letters(deck_cards, card_lookup) -> str:
+    """Get the deck's color identity as Scryfall-compatible letter string (e.g., 'BRG')."""
+    colors = set()
+    for card in deck_cards:
+        card_data = card_lookup.get(card.scryfall_id, {})
+        for c in card_data.get("color_identity", []):
+            colors.add(c)
+    return "".join(sorted(colors)) if colors else "C"
 
 def generate_base_profile(deck_info: dict, deck_cards: list,
                            card_lookup: dict, analytics: dict,
@@ -272,7 +280,12 @@ Scryfall patterns for this archetype:
     
     # Build creature type specific context
     creature_context = ""
-    if primary_type and primary_type != "None":
+    # Only include tribal context if the deck actually has significant tribal density
+    tribal_count = role_dist.get("tribal_synergy", 0)
+    creature_count = role_dist.get("creature", 0)
+    is_tribal = tribal_count >= 5 or (primary_type and primary_type != "None" and creature_count >= 25)
+    
+    if is_tribal and primary_type and primary_type != "None":
         creature_context = f"""
 This deck is built around {primary_type} creatures specifically.
 When generating scryfall_hints, use these patterns:
@@ -367,7 +380,8 @@ Weaknesses: {json.dumps(weaknesses)}
 Primary creature type: {primary_type}
 Average CMC: {analytics.get('average_cmc', 0)}
 Format: {deck_info.get('format', 'commander')}
-Color identity: {json.dumps(analytics.get('deck_identity', {}).get('colors', []))}
+Color identity letters: {_get_color_identity_letters(deck_cards, card_lookup)}
+IMPORTANT: Use id<={_get_color_identity_letters(deck_cards, card_lookup)} in ALL scryfall_hints for this deck
 
 Key synergies:
 {chr(10).join(synergy_lines) if synergy_lines else "  None identified"}
@@ -379,6 +393,18 @@ Role assessment:
   Needs more: {json.dumps(role_needs.get('needs_more', []))}
   Has enough: {json.dumps(role_needs.get('has_enough', []))}
   Over-saturated: {json.dumps(role_needs.get('over_saturated', []))}
+IMPORTANT DECK IDENTITY CONTEXT:
+This deck's strategy: {profile.get('primary_strategy', 'unknown')}
+
+Deck composition analysis:
+- Spells (instants + sorceries): {role_dist.get('instant', 0) + role_dist.get('sorcery', 0) + role_dist.get('card_draw', 0)}
+- Creatures: {role_dist.get('creature', 0) + role_dist.get('tribal_synergy', 0)}
+
+{'THIS IS A SPELL-HEAVY DECK. For ALL categories, prioritize instant and sorcery options. The avoid field MUST say to avoid creature-based and enchantment-based alternatives since this deck wins through spells, not permanents.' if (role_dist.get('instant', 0) + role_dist.get('sorcery', 0) + role_dist.get('card_draw', 0)) > (role_dist.get('creature', 0) + role_dist.get('tribal_synergy', 0)) else ''}
+{'THIS IS A CREATURE-HEAVY DECK. For ALL categories, prioritize permanent-based options (creatures, enchantments, artifacts). The avoid field MUST say to avoid relying on instants/sorceries for repeatable effects since this deck wants board presence.' if (role_dist.get('creature', 0) + role_dist.get('tribal_synergy', 0)) > (role_dist.get('instant', 0) + role_dist.get('sorcery', 0) + role_dist.get('card_draw', 0)) * 1.5 else ''}
+
+The avoid field for each category MUST explicitly name card TYPES to skip (e.g., "Avoid creature-based draw engines" or "Avoid sorcery-speed removal").
+Do NOT use vague avoid guidance like "avoid cards that don't synergize" — be specific about what card types to skip.
 {archetype_context}
 {creature_context}"""
 

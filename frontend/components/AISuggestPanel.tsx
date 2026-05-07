@@ -236,6 +236,12 @@ export default function AISuggestPanel({ deckId, onAddCard }: Props) {
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [elapsed, setElapsed] = useState(0);
+  const [conversationHistory, setConversationHistory] = useState<Array<{
+    role: string;
+    content: string;
+    cards_suggested?: string[];
+    cards_accepted?: string[];
+  }>>([]);
   const [lastClarificationCategory, setLastClarificationCategory] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
@@ -283,6 +289,7 @@ export default function AISuggestPanel({ deckId, onAddCard }: Props) {
       const response = await aiSuggest({
         prompt: promptToSend,
         deck_id: deckId,
+        conversation_context: conversationHistory.length > 0 ? conversationHistory : undefined,
       });
 
       if (response.needs_clarification && (response as any)._original_category) {
@@ -304,6 +311,13 @@ export default function AISuggestPanel({ deckId, onAddCard }: Props) {
         };
         return updated;
       });
+      // Track conversation for context
+      const suggestedCards = response.suggestions?.map(s => s.card_name) || [];
+      setConversationHistory(prev => [
+        ...prev,
+        { role: "user", content: promptToSend },
+        { role: "ai", content: response.summary || "", cards_suggested: suggestedCards, cards_accepted: [] },
+      ]);
     } catch (err: unknown) {
       const errorMsg = err instanceof Error ? err.message : "AI request failed";
       setMessages((prev) => {
@@ -390,7 +404,23 @@ export default function AISuggestPanel({ deckId, onAddCard }: Props) {
                   <AIResponse
                     response={msg.response}
                     onOptionClick={handleOptionClick}
-                    onAddCard={onAddCard}
+                    onAddCard={onAddCard ? async (scryfallId, cardName) => {
+                      await onAddCard(scryfallId, cardName);
+                      // Track acceptance in conversation history
+                      setConversationHistory(prev => {
+                        const updated = [...prev];
+                        for (let i = updated.length - 1; i >= 0; i--) {
+                          if (updated[i].role === "ai" && updated[i].cards_suggested?.includes(cardName)) {
+                            const accepted = updated[i].cards_accepted || [];
+                            if (!accepted.includes(cardName)) {
+                              updated[i] = { ...updated[i], cards_accepted: [...accepted, cardName] };
+                            }
+                            break;
+                          }
+                        }
+                        return updated;
+                      });
+                    } : undefined}
                   />
                 )}
               </div>

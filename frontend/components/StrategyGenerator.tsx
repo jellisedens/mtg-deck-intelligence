@@ -76,8 +76,8 @@ export default function StrategyGenerator({ deckId, hasProfile, onComplete, card
           </span>
           {hasProfile && !generating && (
             isStale ? (
-              <span className="text-xxs text-accent-yellow">
-                stale ({changedCount} change{changedCount !== 1 ? "s" : ""})
+              <span className={`text-xxs ${changedCount >= 10 ? "text-accent-red" : "text-accent-yellow"}`}>
+                {changedCount >= 10 ? "⚠ " : ""}stale ({changedCount} change{changedCount !== 1 ? "s" : ""})
               </span>
             ) : (
               <span className="text-xxs text-accent-green">generated</span>
@@ -89,7 +89,6 @@ export default function StrategyGenerator({ deckId, hasProfile, onComplete, card
 
       {expanded && (
         <div className="px-4 pb-4">
-          {/* Generate/Regenerate button */}
           {!generating && (
             <div className="mb-3">
               <button
@@ -109,14 +108,28 @@ export default function StrategyGenerator({ deckId, hasProfile, onComplete, card
                 </p>
               )}
               {hasProfile && isStale && (
-                <p className="text-xxs text-accent-yellow mt-1">
-                  {changedCount} change{changedCount !== 1 ? "s" : ""} since last generation — impact scores and simulation are approximate
-                </p>
+                changedCount >= 10 ? (
+                  <div className="mt-1 px-2 py-1.5 bg-accent-red/10 border border-accent-red/30 rounded">
+                    <p className="text-xxs text-accent-red font-medium">
+                      ⚠ {changedCount} changes since last generation — profile significantly outdated
+                    </p>
+                    <p className="text-xxs text-accent-red/70 mt-0.5">
+                      synergies, impact scores, and simulation data no longer reflect this deck
+                    </p>
+                  </div>
+                ) : (
+                  <p className="text-xxs text-accent-yellow mt-1">
+                    {changedCount} change{changedCount !== 1 ? "s" : ""} since last generation
+                    {changedCount >= 4
+                      ? " — regenerate recommended"
+                      : " — impact scores are approximate"
+                    }
+                  </p>
+                )
               )}
             </div>
           )}
 
-          {/* Progress bar */}
           {generating && progress && (
             <div className="space-y-2 mb-3">
               <div className="flex items-center justify-between text-xs">
@@ -135,7 +148,6 @@ export default function StrategyGenerator({ deckId, hasProfile, onComplete, card
             </div>
           )}
 
-          {/* Error */}
           {error && (
             <div className="mb-3 px-3 py-2 bg-accent-red/10 border border-accent-red/30 rounded text-accent-red text-xs">
               {error}
@@ -143,7 +155,6 @@ export default function StrategyGenerator({ deckId, hasProfile, onComplete, card
             </div>
           )}
 
-          {/* Profile content */}
           {profile && !generating && (
             <div className="space-y-3 text-xs">
               {commanderRole && (

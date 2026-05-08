@@ -26,6 +26,7 @@ from services.strategy_profiler import (
     _build_compact_summary,
     _get_commander_text,
     _get_color_identity_letters,
+    refresh_strategy_profile,
 )
 from services.mana_analyzer import compute_color_health
 from simulation.sim_tags import build_sim_tag_batches, _call_sim_tag_batch
@@ -335,3 +336,66 @@ async def stream_strategy_generation(
             "X-Accel-Buffering": "no",
         },
     )
+
+@router.post("/{deck_id}/strategy/refresh")
+async def refresh_strategy(
+    deck_id: UUID,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Tier 2 refresh: quickly re-rate provisional cards and update summary."""
+    deck = db.query(Deck).filter(Deck.id == deck_id).first()
+    if not deck:
+        raise HTTPException(status_code=404, detail="Deck not found")
+    if deck.user_id != user.id:
+        raise HTTPException(status_code=403, detail="Not your deck")
+    
+    profile = deck.strategy_profile
+    if not profile:
+        raise HTTPException(status_code=400, detail="No strategy profile to refresh")
+    
+    # Get card data
+    cards = db.query(DeckCard).filter(DeckCard.deck_id == deck.id).all()
+    
+    # Build analytics (also fetches card data)
+    from services.analytics import compute_analytics
+    analytics = await compute_analytics(cards, include_card_data=True)
+    card_lookup = analytics.pop("_card_lookup", {})
+    
+    # Get role data from profile
+    role_data = profile.get("role_data", {})
+    
+    # Build deck info
+    deck_info = {
+        "name": deck.name,
+        "format": deck.format,
+        "description": deck.description,
+        "strategy_profile": profile,
+        "preferences": deck.preferences,
+    }
+    
+    # Run refresh
+    import asyncio
+    loop = asyncio.get_event_loop()
+    updated_profile = await loop.run_in_executor(
+        None,
+        lambda: refresh_strategy_profile(
+            deck_info=deck_info,
+            deck_cards=cards,
+            card_lookup=card_lookup,
+            analytics=analytics,
+            role_data=role_data,
+            profile=profile,
+        )
+    )
+    
+    # Save
+    from sqlalchemy.orm.attributes import flag_modified
+    deck.strategy_profile = updated_profile
+    flag_modified(deck, "strategy_profile")
+    db.commit()
+    
+    return {"status": "refreshed", "cards_rated": len([
+        r for r in updated_profile.get("card_impact_ratings", [])
+        if not r.get("reason", "").startswith("Provisional")
+    ])}

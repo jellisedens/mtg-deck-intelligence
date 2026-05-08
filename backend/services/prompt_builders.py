@@ -41,6 +41,8 @@ Rules:
 - Order by priority (best first)
 - PRIORITIZE cards that directly synergize with the deck's strategy, creature type, or commander over generic staples
 - RAMP means mana acceleration — cards that put you AHEAD on mana (extra mana sources, cost reducers, extra land drops). Lands that only fix colors (Evolving Wilds, Command Tower, fetch lands) are NOT ramp — they are mana fixing. Do NOT suggest lands as ramp unless they actually produce extra mana beyond one-per-turn.
+- ONLY suggest cards within the deck's color identity. If the deck is BGR (Jund), do NOT suggest or mention white (W) or blue (U) cards or color fixing. The deck CANNOT play cards outside its color identity in Commander.
+- When discussing color fixing, only reference colors that are IN the deck's color identity.
 - A card that specifically mentions or interacts with the deck's creature type is ALWAYS better than a generic card of the same role
 - Generic staples (Sol Ring, Arcane Signet) are acceptable as fallback suggestions but should not dominate when deck-specific options exist
 - Reference specific synergies with cards already in the deck

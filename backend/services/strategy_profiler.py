@@ -549,3 +549,117 @@ def generate_strategy_profile(deck_info, deck_cards, card_lookup, analytics, rol
     profile["deck_summary"] = _build_compact_summary(deck_info, analytics, role_data, profile, commander_text)
 
     return profile
+
+
+def refresh_strategy_profile(deck_info: dict, deck_cards: list,
+                              card_lookup: dict, analytics: dict,
+                              role_data: dict, profile: dict) -> dict:
+    """
+    Tier 2 refresh: lightweight profile update.
+    Re-rates provisional cards, updates summary, recalculates color health.
+    One AI call (~5-10s) instead of full regeneration (~1-2min).
+    """
+    # Find cards with provisional ratings
+    ratings = profile.get("card_impact_ratings", [])
+    provisional_cards = [
+        r["card_name"] for r in ratings
+        if r.get("reason", "").startswith("Provisional")
+    ]
+    
+    if not provisional_cards:
+        # No provisional cards — just update summary and clear stale
+        commander_text = _get_commander_text(deck_cards, card_lookup)
+        profile["deck_summary"] = _build_compact_summary(
+            deck_info, analytics, role_data, profile, commander_text
+        )
+        profile["simulation_stale"] = False
+        profile["cards_changed_since_regen"] = 0
+        return profile
+    
+    # Build a focused batch for just the provisional cards
+    card_lines = []
+    for card in deck_cards:
+        if card.card_name in provisional_cards:
+            full_data = card_lookup.get(card.scryfall_id, {})
+            oracle = full_data.get("oracle_text", "")[:150]
+            type_line = full_data.get("type_line", "")
+            mana_cost = full_data.get("mana_cost", "")
+            cmc = full_data.get("cmc", 0)
+            card_lines.append(
+                f"- {card.quantity}x {card.card_name} | {type_line} | {mana_cost} (CMC {cmc}) | {oracle}"
+            )
+    
+    if card_lines:
+        commander_text = _get_commander_text(deck_cards, card_lookup)
+        identity = analytics.get("deck_identity", {})
+        
+        context = f"""Deck: {deck_info.get('name', 'Unknown')} | Format: {deck_info.get('format', 'Unknown')}
+{commander_text}
+Strategy: {profile.get('primary_strategy', 'Unknown')}
+Win conditions: {json.dumps(profile.get('win_conditions', []))}
+Critical cards: {json.dumps(profile.get('critical_cards', []))}
+Deck identity: {identity.get('recommendation_weight', 'balanced')}
+Average CMC: {analytics.get('average_cmc', 0)}
+Primary creature type: {role_data.get('primary_creature_type', 'None')}"""
+
+        system = """You are an expert Magic: The Gathering deck analyst.
+Rate each card's strategic importance to THIS SPECIFIC DECK on a 1-10 scale.
+
+Respond with ONLY a valid JSON array (no markdown, no backticks):
+[
+    {"card_name": "Card Name", "score": 8, "reason": "One sentence explaining the rating"},
+    ...
+]
+
+SCORING GUIDE:
+9-10 CORE: Deck's strategy depends on this card.
+7-8  STRONG: High synergy, hard to replace.
+5-6  SOLID: Competent but replaceable.
+3-4  FLEXIBLE: Weaker option, could be upgraded.
+1-2  CUTTABLE: Lowest impact. Off-theme or redundant.
+
+Rate ALL cards provided - do not skip any."""
+
+        user_msg = f"""{context}
+
+Rate these {len(provisional_cards)} recently added cards:
+{chr(10).join(card_lines)}"""
+
+        try:
+            response = client.chat.completions.create(
+                model=MODEL,
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user_msg},
+                ],
+                temperature=0.3,
+                max_tokens=2000,
+            )
+            content = response.choices[0].message.content.strip()
+            content = content.replace("```json", "").replace("```", "").strip()
+            new_ratings = json.loads(content)
+            
+            if isinstance(new_ratings, list):
+                # Replace provisional ratings with real ones
+                rated_names = {r["card_name"].lower() for r in new_ratings}
+                kept_ratings = [
+                    r for r in ratings
+                    if r.get("card_name", "").lower() not in rated_names
+                ]
+                kept_ratings.extend(new_ratings)
+                profile["card_impact_ratings"] = kept_ratings
+                
+        except Exception as e:
+            print(f"[REFRESH] Rating failed: {e}")
+    
+    # Rebuild summary
+    commander_text = _get_commander_text(deck_cards, card_lookup)
+    profile["deck_summary"] = _build_compact_summary(
+        deck_info, analytics, role_data, profile, commander_text
+    )
+    
+    # Clear stale flags
+    profile["simulation_stale"] = False
+    profile["cards_changed_since_regen"] = 0
+    
+    return profile

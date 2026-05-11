@@ -8,6 +8,7 @@ from services.deck_context import build_simulation_context
 from services.cut_analyzer import build_cut_context
 from services.mana_analyzer import format_color_health_for_prompt
 from services.mtg_knowledge import build_knowledge_context
+from services.deck_intelligence import get_intelligence_context
 
 
 def build_suggest_prompt(prompt: str, plan: dict, search_results: list,
@@ -82,6 +83,11 @@ Rules:
     prefs_str = _get_user_preferences(deck_info)
     if prefs_str:
         user_msg += f"\n{prefs_str}\n"
+    
+    # Add deck intelligence context (passive background, not directives)
+    intel_str = _get_intelligence_context(deck_info)
+    if intel_str:
+        user_msg += f"\n{intel_str}\n"
 
     user_msg += f"\nSearch results ({len(search_results)} cards):\n"
     for card in search_results:
@@ -389,6 +395,8 @@ def _get_user_preferences(deck_info: dict) -> str:
         lines.append(f"- Card type preferences: {preferences['card_type_preferences']}")
     if preferences.get("budget"):
         lines.append(f"- Budget: {preferences['budget']}")
+    if preferences.get("power_level"):
+        lines.append(f"- Power level: {preferences['power_level']}")
     if preferences.get("other_notes"):
         lines.append(f"- Notes: {preferences['other_notes']}")
 
@@ -438,3 +446,53 @@ def _get_knowledge_for_suggest(deck_info: dict) -> str:
                     knowledge += f"\n    • {p}"
     
     return knowledge
+
+def _get_intelligence_context(deck_info: dict) -> str:
+    """Build passive intelligence context from deck history."""
+    if not deck_info:
+        return ""
+    intel = deck_info.get("deck_intelligence")
+    if not intel:
+        return ""
+    
+    parts = ["DECK HISTORY (background context only — do not over-weight recent activity):"]
+    
+    # Preferences
+    prefs = intel.get("preferences", {})
+    if prefs.get("power_level"):
+        parts.append(f"  Power level: {prefs['power_level']}")
+    if prefs.get("budget_sensitivity"):
+        parts.append(f"  Budget: {prefs['budget_sensitivity']}")
+    if prefs.get("meta_notes"):
+        parts.append(f"  Meta notes: {'; '.join(prefs['meta_notes'][:3])}")
+    
+    # Recent card changes (last 5)
+    history = intel.get("history", {})
+    recent_changes = history.get("card_changes", [])[-5:]
+    if recent_changes:
+        change_lines = []
+        for ch in recent_changes:
+            change_lines.append(f"{ch.get('action', '?')} {ch.get('card_name', '?')}")
+        parts.append(f"  Recent changes: {', '.join(change_lines)}")
+    
+    # Suggestion acceptance patterns (last 3 sessions)
+    recent_suggestions = history.get("suggestion_log", [])[-3:]
+    if recent_suggestions:
+        total_offered = 0
+        total_accepted = 0
+        for log in recent_suggestions:
+            total_offered += len(log.get("suggestions_offered", []))
+            total_accepted += len(log.get("cards_accepted", []))
+        if total_offered > 0:
+            parts.append(f"  Recent acceptance: {total_accepted}/{total_offered} suggestions added")
+    
+    # Accumulated insights
+    insights = intel.get("accumulated_insight", [])
+    if insights:
+        parts.append(f"  Insights: {'; '.join(insights[:3])}")
+    
+    # Only return if we have more than the header
+    if len(parts) <= 1:
+        return ""
+    
+    return "\n".join(parts)

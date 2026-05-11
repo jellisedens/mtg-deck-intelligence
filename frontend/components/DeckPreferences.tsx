@@ -9,12 +9,21 @@ interface Props {
   onSaved: () => void;
 }
 
+const POWER_LEVELS = [
+  { value: "", label: "not set" },
+  { value: "casual", label: "casual — fun first, no pubstomping" },
+  { value: "focused", label: "focused — has a plan, not fully optimized" },
+  { value: "optimized", label: "optimized — tuned, efficient, strong" },
+  { value: "cedh", label: "cEDH — competitive, fast combos, no holds barred" },
+];
+
 export default function DeckPreferences({ deckId, currentPreferences, onSaved }: Props) {
   const [expanded, setExpanded] = useState(false);
   const [strategyNotes, setStrategyNotes] = useState("");
   const [colorPreferences, setColorPreferences] = useState("");
   const [cardTypePreferences, setCardTypePreferences] = useState("");
   const [budget, setBudget] = useState("");
+  const [powerLevel, setPowerLevel] = useState("");
   const [otherNotes, setOtherNotes] = useState("");
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -25,6 +34,7 @@ export default function DeckPreferences({ deckId, currentPreferences, onSaved }:
       setColorPreferences(currentPreferences.color_preferences || "");
       setCardTypePreferences(currentPreferences.card_type_preferences || "");
       setBudget(currentPreferences.budget || "");
+      setPowerLevel(currentPreferences.power_level || "");
       setOtherNotes(currentPreferences.other_notes || "");
     }
   }, [currentPreferences]);
@@ -32,11 +42,20 @@ export default function DeckPreferences({ deckId, currentPreferences, onSaved }:
   async function handleSave() {
     setSaving(true);
     try {
+      console.log("[PREFS] Saving:", {
+        strategy_notes: strategyNotes || null,
+        color_preferences: colorPreferences || null,
+        card_type_preferences: cardTypePreferences || null,
+        budget: budget || null,
+        power_level: powerLevel || null,
+        other_notes: otherNotes || null,
+      });
       await updateDeckPreferences(deckId, {
         strategy_notes: strategyNotes || null,
         color_preferences: colorPreferences || null,
         card_type_preferences: cardTypePreferences || null,
         budget: budget || null,
+        power_level: powerLevel || null,
         other_notes: otherNotes || null,
       });
       setSaved(true);
@@ -49,7 +68,7 @@ export default function DeckPreferences({ deckId, currentPreferences, onSaved }:
     }
   }
 
-  const hasPreferences = strategyNotes || colorPreferences || cardTypePreferences || budget || otherNotes;
+  const hasPreferences = strategyNotes || colorPreferences || cardTypePreferences || budget || powerLevel || otherNotes;
 
   return (
     <div className="panel">
@@ -73,6 +92,23 @@ export default function DeckPreferences({ deckId, currentPreferences, onSaved }:
           <p className="text-xxs text-text-muted">
             these preferences guide AI suggestions to match your vision for the deck
           </p>
+
+          <div>
+            <label className="block text-xxs text-text-secondary mb-1">
+              power level
+            </label>
+            <select
+              value={powerLevel}
+              onChange={(e) => setPowerLevel(e.target.value)}
+              className="input-terminal text-xs w-full"
+            >
+              {POWER_LEVELS.map((pl) => (
+                <option key={pl.value} value={pl.value}>
+                  {pl.label}
+                </option>
+              ))}
+            </select>
+          </div>
 
           <div>
             <label className="block text-xxs text-text-secondary mb-1">

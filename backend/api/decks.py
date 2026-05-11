@@ -406,6 +406,7 @@ def update_preferences(
     update_data = request.model_dump(exclude_none=True)
     current.update(update_data)
     deck.preferences = current
+    flag_modified(deck, "preferences")
 
     db.commit()
     db.refresh(deck)

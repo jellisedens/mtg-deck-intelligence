@@ -24,6 +24,7 @@ class DeckPreferences(BaseModel):
     color_preferences: Optional[str] = None
     card_type_preferences: Optional[str] = None
     budget: Optional[str] = None
+    power_level: Optional[str] = None
     other_notes: Optional[str] = None
 
 

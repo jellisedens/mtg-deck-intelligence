@@ -63,6 +63,11 @@ export default function StrategyGenerator({ deckId, hasProfile, onComplete, card
   const weaknesses = profile?.weaknesses as string[] | undefined;
   const roleNeeds = profile?.role_needs as { needs_more?: string[]; has_enough?: string[]; over_saturated?: string[] } | undefined;
   const upgradePriorities = profile?.upgrade_priorities as string[] | undefined;
+  const [showPlaybook, setShowPlaybook] = useState(false);
+  const playbook = (profile?.archetype_playbook || null) as Record<string, unknown> | null;
+  const playbookIdentity = (playbook?.identity || "") as string;
+  const playbookCategories = (playbook?.category_guidance || {}) as Record<string, Record<string, unknown>>;
+  const playbookUnique = (playbook?.unique_categories || {}) as Record<string, Record<string, unknown>>;
 
   return (
     <div className="panel">
@@ -257,6 +262,73 @@ export default function StrategyGenerator({ deckId, hasProfile, onComplete, card
                       </div>
                     ))}
                   </div>
+                </div>
+              )}
+
+              {/* AI Playbook */}
+              {playbook && (
+                <div className="border-t border-border pt-3 mt-3">
+                  <button
+                    onClick={() => setShowPlaybook(!showPlaybook)}
+                    className="text-xxs text-text-muted hover:text-text-secondary transition-colors"
+                  >
+                    {showPlaybook ? "▲ hide" : "▼ show"} AI playbook
+                  </button>
+
+                  {showPlaybook && (
+                    <div className="mt-2 space-y-2 text-xs">
+                      {playbookIdentity && (
+                        <div>
+                          <span className="text-xxs text-text-muted uppercase tracking-wider">deck identity</span>
+                          <p className="text-text-secondary mt-0.5">{playbookIdentity}</p>
+                        </div>
+                      )}
+
+                      {Object.keys(playbookCategories).length > 0 && (
+                        <div>
+                          <span className="text-xxs text-text-muted uppercase tracking-wider">category priorities</span>
+                          <div className="mt-0.5 space-y-1">
+                            {Object.entries(playbookCategories).map(([cat, guidance]) => {
+                              const priorities = (guidance.priorities || []) as string[];
+                              const avoid = guidance.avoid as string | undefined;
+                              return (
+                                <div key={cat}>
+                                  <span className="text-text-primary text-xxs font-medium">{cat}</span>
+                                  {priorities.length > 0 && (
+                                    <p className="text-text-muted text-xxs ml-2">{priorities[0]}</p>
+                                  )}
+                                  {avoid && (
+                                    <p className="text-accent-red/60 text-xxs ml-2">✗ {avoid}</p>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
+
+                      {Object.keys(playbookUnique).length > 0 && (
+                        <div>
+                          <span className="text-xxs text-text-muted uppercase tracking-wider">deck-specific categories</span>
+                          <div className="mt-0.5 space-y-0.5">
+                            {Object.entries(playbookUnique).map(([cat, guidance]) => (
+                              <div key={cat}>
+                                <span className="text-text-primary text-xxs font-medium">{cat}</span>
+                                <span className="text-text-muted text-xxs ml-1">— {String(guidance.description)}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      <div className="text-xxs text-text-muted space-y-0.5">
+                        {Boolean(profile?.color_identity) && <p>Colors: {String(profile?.color_identity)}</p>}
+                        {Boolean((profile?.role_data as Record<string, unknown>)?.primary_creature_type) && (
+                          <p>Primary type: {String((profile?.role_data as Record<string, unknown>)?.primary_creature_type)}</p>
+                        )}
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </div>

@@ -24,6 +24,7 @@ class Deck(Base):
     user = relationship("User", back_populates="decks")
     cards = relationship("DeckCard", back_populates="deck", cascade="all, delete-orphan")
     simulation_results = relationship("SimulationResult", back_populates="deck", cascade="all, delete-orphan")
+    versions = relationship("DeckVersion", back_populates="deck", cascade="all, delete-orphan", order_by="DeckVersion.version_number.desc()")
 
     def __repr__(self):
         return f"<Deck {self.name} ({self.format})>"

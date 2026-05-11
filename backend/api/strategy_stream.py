@@ -15,6 +15,7 @@ from database.session import get_db
 from models.user import User
 from models.deck import Deck
 from models.deck_card import DeckCard
+from models.deck_version import DeckVersion
 from api.deps import get_current_user
 from services.analytics import compute_analytics
 from services.role_classifier import classify_deck_roles
@@ -289,16 +290,44 @@ async def stream_strategy_generation(
             # Reset stale flags — this is a fresh generation
             profile["simulation_stale"] = False
             profile["cards_changed_since_regen"] = 0
-            # Save
+
             try:
                 from database.session import SessionLocal
+                from sqlalchemy import func
                 save_db = SessionLocal()
                 save_deck = save_db.query(Deck).filter(Deck.id == deck_id).first()
+                
+                # Auto-version before regeneration
+                try:
+                    max_v = save_db.query(func.max(DeckVersion.version_number)).filter(
+                        DeckVersion.deck_id == deck_id
+                    ).scalar() or 0
+                    card_snap = [
+                        {"scryfall_id": c.scryfall_id, "card_name": c.card_name,
+                         "quantity": c.quantity, "board": c.board}
+                        for c in save_db.query(DeckCard).filter(DeckCard.deck_id == deck_id).all()
+                    ]
+                    auto_v = DeckVersion(
+                        deck_id=deck_id,
+                        version_number=max_v + 1,
+                        name="Auto-save before regeneration",
+                        card_snapshot=card_snap,
+                        strategy_snapshot={
+                            "primary_strategy": (save_deck.strategy_profile or {}).get("primary_strategy"),
+                            "color_identity": (save_deck.strategy_profile or {}).get("color_identity"),
+                        } if save_deck.strategy_profile else None,
+                    )
+                    save_db.add(auto_v)
+                except Exception:
+                    pass  # Auto-versioning is non-critical
+
                 save_deck.strategy_profile = profile
                 save_db.commit()
                 # Seed intelligence from the new profile
                 seed_from_strategy_profile(save_deck, save_db)
                 save_db.close()
+            except Exception as save_err:
+                print(f"[STRATEGY] Save error: {save_err}")
             except Exception as save_err:
                 print(f"[STRATEGY] Save error: {save_err}")
 

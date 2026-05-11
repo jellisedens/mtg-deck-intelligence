@@ -15,6 +15,7 @@ import { getDeck, addCard, updateCard, removeCard, getStrategy } from "@/lib/api
 import { useCardCache } from "@/lib/card-cache";
 import { Deck, ScryfallCard } from "@/lib/types";
 import { usePathname } from "next/navigation";
+import DeckVersions from "@/components/DeckVersions";
 
 function DeckBuilderContent({ deckId }: { deckId: string }) {
   const router = useRouter();
@@ -280,6 +281,10 @@ function DeckBuilderContent({ deckId }: { deckId: string }) {
             onSaved={() => loadDeck()}
           />
           <AISuggestPanel deckId={deckId} onAddCard={handleAddCardById} />
+          <DeckVersions
+            deckId={deckId}
+            cardCount={deck.cards?.reduce((sum, c) => sum + c.quantity, 0) || 0}
+          />
           <DeckAnalytics
             deckId={deckId}
             cardCount={deck.cards?.reduce((sum, c) => sum + c.quantity, 0) || 0}

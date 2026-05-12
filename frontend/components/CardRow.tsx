@@ -35,9 +35,10 @@ export default function CardRow({
             onClick={() => {
               if (card.quantity > 1) {
                 onUpdateQuantity(card.id, card.quantity - 1);
+              } else if (confirm(`Remove ${card.card_name} from the deck?`)) {
+                onRemoveCard(card.id);
               }
             }}
-            disabled={card.quantity <= 1}
             className="w-5 h-5 flex items-center justify-center text-xs text-text-muted hover:text-text-primary disabled:opacity-30 transition-colors"
           >
             −

@@ -369,11 +369,12 @@ def update_card(
             _patch_strategy_card_removed(deck, removed_name)
             if deck.strategy_profile is not None:
                 flag_modified(deck, "strategy_profile")
+            try:
+                log_card_removed(deck, db, removed_name)
+            except Exception:
+                pass
             db.commit()
-            raise HTTPException(
-                status_code=status.HTTP_200_OK,
-                detail="Card removed (quantity set to 0)",
-            )
+            return card  # Return the card before deletion — frontend will re-fetch anyway
         card.quantity = request.quantity
 
     if request.board is not None:

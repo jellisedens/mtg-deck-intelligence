@@ -121,8 +121,9 @@ function DeckBuilderContent({ deckId }: { deckId: string }) {
   async function handleUpdateQuantity(cardId: string, quantity: number) {
     setActionError("");
     try {
-      const updated = await updateCard(deckId, cardId, { quantity });
-      setDeck(updated);
+      await updateCard(deckId, cardId, { quantity });
+      const refreshed = await getDeck(deckId);
+      setDeck(refreshed);
     } catch (err: unknown) {
       setActionError(
         err instanceof Error ? err.message : "Failed to update card"
@@ -135,10 +136,8 @@ function DeckBuilderContent({ deckId }: { deckId: string }) {
     setActionError("");
     try {
       await removeCard(deckId, cardId);
-      setDeck({
-        ...deck,
-        cards: deck.cards?.filter((c) => c.id !== cardId),
-      });
+      const refreshed = await getDeck(deckId);
+      setDeck(refreshed);
     } catch (err: unknown) {
       setActionError(
         err instanceof Error ? err.message : "Failed to remove card"
@@ -149,8 +148,9 @@ function DeckBuilderContent({ deckId }: { deckId: string }) {
   async function handleChangeBoard(cardId: string, board: string) {
     setActionError("");
     try {
-      const updated = await updateCard(deckId, cardId, { board });
-      setDeck(updated);
+      await updateCard(deckId, cardId, { board });
+      const refreshed = await getDeck(deckId);
+      setDeck(refreshed);
     } catch (err: unknown) {
       setActionError(
         err instanceof Error ? err.message : "Failed to move card"
@@ -161,8 +161,9 @@ function DeckBuilderContent({ deckId }: { deckId: string }) {
   async function handleUpdateNotes(cardId: string, notes: string) {
     setActionError("");
     try {
-      const updated = await updateCard(deckId, cardId, { notes });
-      setDeck(updated);
+      await updateCard(deckId, cardId, { notes });
+      const refreshed = await getDeck(deckId);
+      setDeck(refreshed);
     } catch (err: unknown) {
       setActionError(
         err instanceof Error ? err.message : "Failed to save notes"

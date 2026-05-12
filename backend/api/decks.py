@@ -309,12 +309,20 @@ def add_card(
                         detail="This deck already has a commander. Remove the current commander first.",
                     )
 
-    # Check if card already in deck on the same board
+    # Check if card already in deck on the same board (by scryfall_id OR card_name)
     existing = db.query(DeckCard).filter(
         DeckCard.deck_id == deck.id,
         DeckCard.scryfall_id == request.scryfall_id,
         DeckCard.board == request.board,
     ).first()
+
+    if not existing:
+        # Also check by card name — different printings should stack
+        existing = db.query(DeckCard).filter(
+            DeckCard.deck_id == deck.id,
+            DeckCard.card_name == request.card_name,
+            DeckCard.board == request.board,
+        ).first()
 
     if existing:
         existing.quantity += request.quantity
@@ -363,6 +371,16 @@ def update_card(
         raise HTTPException(status_code=404, detail="Card not found in this deck")
 
     if request.quantity is not None:
+        # Check 100-card limit for Commander
+        if deck.format == "commander" and request.quantity > card.quantity:
+            current_cards = db.query(DeckCard).filter(DeckCard.deck_id == deck.id).all()
+            total_count = sum(c.quantity for c in current_cards)
+            added = request.quantity - card.quantity
+            if total_count + added > 100:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Commander decks must have exactly 100 cards. Currently at {total_count}, cannot add {added} more.",
+                )
         if request.quantity <= 0:
             removed_name = card.card_name
             db.delete(card)

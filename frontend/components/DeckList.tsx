@@ -36,7 +36,7 @@ function getCardType(card: DeckCard, cardData?: ScryfallCard): string {
 interface Props {
   cards: DeckCard[];
   cardDataMap: Record<string, ScryfallCard>;
-  onUpdateQuantity: (cardId: string, quantity: number) => void;
+  onUpdateQuantity: (cardId: string, quantity: number) => Promise<string | null>;
   onRemoveCard: (cardId: string) => void;
   onChangeBoard: (cardId: string, board: string) => void;
   onUpdateNotes: (cardId: string, notes: string) => void;

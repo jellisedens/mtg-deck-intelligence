@@ -31,6 +31,10 @@ def compute_color_health(simulation_data: dict, analytics: dict) -> dict:
         sources = color_sources.get(color, 0)
         sim_access = color_access.get(color, 0)
 
+        # Skip colors not in the deck
+        if pips == 0 and sources == 0:
+            continue
+
         if pips > 0:
             adequacy = min(100, (sources / pips) * 100)
         elif sources > 0:

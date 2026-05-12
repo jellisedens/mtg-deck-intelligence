@@ -118,16 +118,16 @@ function DeckBuilderContent({ deckId }: { deckId: string }) {
     }
   }
 
-  async function handleUpdateQuantity(cardId: string, quantity: number) {
+  async function handleUpdateQuantity(cardId: string, quantity: number): Promise<string | null> {
     setActionError("");
     try {
       await updateCard(deckId, cardId, { quantity });
       const refreshed = await getDeck(deckId);
       setDeck(refreshed);
+      return null;
     } catch (err: unknown) {
-      setActionError(
-        err instanceof Error ? err.message : "Failed to update card"
-      );
+      const msg = err instanceof Error ? err.message : "Failed to update card";
+      return msg;
     }
   }
 

@@ -304,7 +304,7 @@ export default function DeckVersions({ deckId, cardCount }: Props) {
 
 
   function _parseColorHealth(raw: Record<string, unknown>, colorIdentity?: string): Record<string, { score: number; status: string }> | null {
-    const perColor = (raw.color_health || raw) as Record<string, { score: number }>;
+    const perColor = (raw.color_health || raw) as Record<string, { score: number; sources?: number; pips?: number }>;
     if (!perColor || typeof perColor !== "object") return null;
 
     const deckColors = colorIdentity ? colorIdentity.split("") : null;
@@ -319,10 +319,13 @@ export default function DeckVersions({ deckId, cardCount }: Props) {
       };
     }
 
-    // Add per-color health (only for colors in the deck)
+    // Add per-color health — filter by color identity AND by actual usage
     for (const [color, data] of Object.entries(perColor)) {
       if (!data || typeof data !== "object" || !("score" in data)) continue;
+      // Skip colors not in deck identity
       if (deckColors && !deckColors.includes(color)) continue;
+      // Skip colors with no pips and no sources (not used in deck)
+      if ((data.pips || 0) === 0 && (data.sources || 0) === 0) continue;
       result[color] = {
         score: Math.round(data.score),
         status: data.score >= 80 ? "healthy" : data.score >= 65 ? "fair" : "critical",

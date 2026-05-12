@@ -8,7 +8,7 @@ import CardDetail from "./CardDetail";
 interface Props {
   card: DeckCard;
   cardData?: ScryfallCard;
-  onUpdateQuantity: (cardId: string, quantity: number) => void;
+  onUpdateQuantity: (cardId: string, quantity: number) => Promise<string | null>;
   onRemoveCard: (cardId: string) => void;
   onUpdateNotes: (cardId: string, notes: string) => void;
   format: string;
@@ -23,6 +23,7 @@ export default function CardRow({
   format,
 }: Props) {
   const [expanded, setExpanded] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const isSingleton = format === "commander";
   const aiContext = card.ai_context;
 
@@ -32,9 +33,14 @@ export default function CardRow({
         {/* Quantity controls */}
         <div className="flex items-center gap-1 flex-shrink-0">
           <button
-            onClick={() => {
+            onClick={async () => {
               if (card.quantity > 1) {
-                onUpdateQuantity(card.id, card.quantity - 1);
+                setError(null);
+                const err = await onUpdateQuantity(card.id, card.quantity - 1);
+                if (err) {
+                  setError(err);
+                  setTimeout(() => setError(null), 4000);
+                }
               } else if (confirm(`Remove ${card.card_name} from the deck?`)) {
                 onRemoveCard(card.id);
               }
@@ -47,9 +53,14 @@ export default function CardRow({
             {card.quantity}
           </span>
           <button
-            onClick={() => {
+            onClick={async () => {
               if (!isSingleton || card.board === "main") {
-                onUpdateQuantity(card.id, card.quantity + 1);
+                setError(null);
+                const err = await onUpdateQuantity(card.id, card.quantity + 1);
+                if (err) {
+                  setError(err);
+                  setTimeout(() => setError(null), 4000);
+                }
               }
             }}
             disabled={isSingleton && card.board !== "main"}
@@ -92,6 +103,14 @@ export default function CardRow({
           ✕
         </button>
       </div>
+
+      {/* Inline error */}
+      {error && (
+        <div className="mx-2 mb-1 px-2 py-1 bg-accent-red/10 border border-accent-red/30 rounded text-accent-red text-xxs">
+          {error}
+          <button onClick={() => setError(null)} className="ml-2 text-accent-red/60 hover:text-accent-red">✕</button>
+        </div>
+      )}
 
       {/* Expanded detail */}
       {expanded && cardData && (

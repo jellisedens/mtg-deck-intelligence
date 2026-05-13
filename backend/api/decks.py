@@ -405,6 +405,35 @@ def update_card(
     db.refresh(card)
     return card
 
+@router.put("/{deck_id}/cards/{card_id}/roles")
+def update_card_roles(
+    deck_id: UUID,
+    card_id: UUID,
+    roles: list[str],
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Update user-assigned roles for a card."""
+    deck = db.query(Deck).filter(Deck.id == deck_id).first()
+    if not deck:
+        raise HTTPException(status_code=404, detail="Deck not found")
+    if deck.user_id != user.id:
+        raise HTTPException(status_code=403, detail="Not your deck")
+
+    card = db.query(DeckCard).filter(
+        DeckCard.id == card_id,
+        DeckCard.deck_id == deck.id,
+    ).first()
+    if not card:
+        raise HTTPException(status_code=404, detail="Card not found")
+
+    ai_context = card.ai_context or {}
+    ai_context["roles"] = roles
+    card.ai_context = ai_context
+    flag_modified(card, "ai_context")
+    db.commit()
+
+    return {"card_id": str(card.id), "roles": roles}
 
 @router.put("/{deck_id}/preferences", response_model=DeckResponse)
 def update_preferences(
@@ -460,3 +489,41 @@ def remove_card(
         log_card_removed(deck, db, card_name)
     except Exception:
         pass
+
+
+@router.get("/{deck_id}/roles")
+def get_deck_roles(
+    deck_id: UUID,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Get all unique roles assigned to cards in this deck with counts."""
+    deck = db.query(Deck).filter(Deck.id == deck_id).first()
+    if not deck:
+        raise HTTPException(status_code=404, detail="Deck not found")
+    if deck.user_id != user.id:
+        raise HTTPException(status_code=403, detail="Not your deck")
+
+    cards = db.query(DeckCard).filter(DeckCard.deck_id == deck.id).all()
+    
+    role_counts = {}
+    role_cards = {}
+    for card in cards:
+        ai_context = card.ai_context or {}
+        roles = ai_context.get("roles", [])
+        for role in roles:
+            role_counts[role] = role_counts.get(role, 0) + card.quantity
+            if role not in role_cards:
+                role_cards[role] = []
+            role_cards[role].append(card.card_name)
+    
+    return {
+        "roles": [
+            {
+                "role": role,
+                "count": count,
+                "cards": sorted(role_cards.get(role, [])),
+            }
+            for role, count in sorted(role_counts.items(), key=lambda x: -x[1])
+        ]
+    }

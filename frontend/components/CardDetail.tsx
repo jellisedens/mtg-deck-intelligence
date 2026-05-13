@@ -3,6 +3,13 @@
 import { useState, useEffect } from "react";
 import { ScryfallCard, DeckCard } from "@/lib/types";
 
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8001";
+
+const AVAILABLE_ROLES = [
+  "ramp", "card_draw", "removal", "board_wipe", "protection",
+  "tutor", "tokens", "recursion", "finisher", "utility",
+];
+
 function CardImage({ scryfallId }: { scryfallId: string }) {
   const [error, setError] = useState(false);
 
@@ -47,19 +54,46 @@ function ScoreBadge({ score }: { score: number }) {
 interface Props {
   cardData: ScryfallCard;
   deckCard: DeckCard;
+  deckId: string;
   onUpdateNotes: (cardId: string, notes: string) => void;
+  onRolesUpdated?: () => void;
 }
 
-export default function CardDetail({ cardData, deckCard, onUpdateNotes }: Props) {
+export default function CardDetail({ cardData, deckCard, deckId, onUpdateNotes, onRolesUpdated }: Props) {
   const [notes, setNotes] = useState(deckCard.notes || "");
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [roles, setRoles] = useState<string[]>(deckCard.ai_context?.roles || []);
+  const [roleSaving, setRoleSaving] = useState(false);
+  const [deckRolesList, setDeckRolesList] = useState<string[]>([]);
   const aiContext = deckCard.ai_context;
 
-  // Reset local state when deckCard changes
+
+  useEffect(() => {
+    async function fetchDeckRoles() {
+      try {
+        const token = localStorage.getItem("mtg_token");
+        const res = await fetch(`${API_BASE}/decks/${deckId}/roles`, {
+          headers: { Authorization: `Bearer ${token || ""}` },
+        });
+        if (res.ok) {
+          const data = await res.json();
+          const customRoles = (data.roles || [])
+            .map((r: { role: string }) => r.role)
+            .filter((r: string) => !AVAILABLE_ROLES.includes(r));
+          setDeckRolesList(customRoles);
+        }
+      } catch {
+        // silent
+      }
+    }
+    fetchDeckRoles();
+  }, [deckId]);
+
   useEffect(() => {
     setNotes(deckCard.notes || "");
-  }, [deckCard.notes]);
+    setRoles(deckCard.ai_context?.roles || []);
+  }, [deckCard.notes, deckCard.ai_context]);
 
   async function handleSaveNotes() {
     setSaving(true);
@@ -67,6 +101,40 @@ export default function CardDetail({ cardData, deckCard, onUpdateNotes }: Props)
     setSaving(false);
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
+  }
+
+  async function toggleRole(role: string) {
+    const newRoles = roles.includes(role)
+      ? roles.filter(r => r !== role)
+      : [...roles, role];
+    
+    setRoles(newRoles);
+    setRoleSaving(true);
+
+    try {
+      const token = localStorage.getItem("mtg_token");
+      const res = await fetch(`${API_BASE}/decks/${deckId}/cards/${deckCard.id}/roles`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(newRoles),
+      });
+      if (!res.ok) {
+        setRoles(roles);
+      } else {
+        if (onRolesUpdated) onRolesUpdated();
+        // If adding a custom role, add to local deck roles list
+        if (!AVAILABLE_ROLES.includes(role) && !deckRolesList.includes(role) && newRoles.includes(role)) {
+          setDeckRolesList(prev => [...prev, role]);
+        }
+      }
+    } catch {
+      setRoles(roles);
+    } finally {
+      setRoleSaving(false);
+    }
   }
 
   return (
@@ -79,71 +147,120 @@ export default function CardDetail({ cardData, deckCard, onUpdateNotes }: Props)
 
         {/* Card info */}
         <div className="space-y-3 text-sm">
-          {/* Type line */}
           <div>
-            <span className="text-xxs text-text-muted uppercase tracking-wider">
-              type
-            </span>
+            <span className="text-xxs text-text-muted uppercase tracking-wider">type</span>
             <p className="text-text-primary">{cardData.type_line}</p>
           </div>
 
-          {/* Oracle text */}
           {cardData.oracle_text && (
             <div>
-              <span className="text-xxs text-text-muted uppercase tracking-wider">
-                text
-              </span>
+              <span className="text-xxs text-text-muted uppercase tracking-wider">text</span>
               <p className="text-text-secondary text-xs leading-relaxed whitespace-pre-line">
                 {cardData.oracle_text}
               </p>
             </div>
           )}
 
-          {/* Power / Toughness */}
           {cardData.power && cardData.toughness && (
             <div>
-              <span className="text-xxs text-text-muted uppercase tracking-wider">
-                p/t
-              </span>
-              <p className="text-text-primary">
-                {cardData.power}/{cardData.toughness}
-              </p>
+              <span className="text-xxs text-text-muted uppercase tracking-wider">p/t</span>
+              <p className="text-text-primary">{cardData.power}/{cardData.toughness}</p>
             </div>
           )}
 
-          {/* Set + Rarity */}
           <div className="flex gap-4">
             <div>
-              <span className="text-xxs text-text-muted uppercase tracking-wider">
-                set
-              </span>
+              <span className="text-xxs text-text-muted uppercase tracking-wider">set</span>
               <p className="text-text-secondary text-xs">{cardData.set_name}</p>
             </div>
             <div>
-              <span className="text-xxs text-text-muted uppercase tracking-wider">
-                rarity
-              </span>
+              <span className="text-xxs text-text-muted uppercase tracking-wider">rarity</span>
               <p className="text-text-secondary text-xs">{cardData.rarity}</p>
             </div>
           </div>
 
-          {/* Price */}
           {cardData.prices?.usd && (
             <div>
-              <span className="text-xxs text-text-muted uppercase tracking-wider">
-                price
-              </span>
+              <span className="text-xxs text-text-muted uppercase tracking-wider">price</span>
               <p className="text-accent-green text-xs">
                 ${cardData.prices.usd}
                 {cardData.prices.usd_foil && (
-                  <span className="text-text-muted ml-2">
-                    foil: ${cardData.prices.usd_foil}
-                  </span>
+                  <span className="text-text-muted ml-2">foil: ${cardData.prices.usd_foil}</span>
                 )}
               </p>
             </div>
           )}
         </div>
+      </div>
+
+      {/* User role tags */}
+      <div className="border-t border-border pt-3">
+        <div className="flex items-center gap-2 mb-2">
+          <span className="text-xxs text-text-muted uppercase tracking-wider">card roles</span>
+          {roleSaving && <span className="text-xxs text-text-muted animate-pulse">saving...</span>}
+        </div>
+        <div className="flex flex-wrap gap-1.5">
+          {AVAILABLE_ROLES.map(role => (
+            <button
+              key={role}
+              onClick={() => toggleRole(role)}
+              className={`text-xxs px-2 py-0.5 rounded border transition-colors ${
+                roles.includes(role)
+                  ? "border-accent-green text-accent-green bg-accent-green/10"
+                  : "border-border text-text-muted hover:text-text-secondary"
+              }`}
+            >
+              {role.replace("_", " ")}
+            </button>
+          ))}
+          {/* Custom roles from this deck */}
+          {deckRolesList.map(role => (
+            <button
+              key={role}
+              onClick={() => toggleRole(role)}
+              className={`text-xxs px-2 py-0.5 rounded border transition-colors ${
+                roles.includes(role)
+                  ? "border-accent-green text-accent-green bg-accent-green/10"
+                  : "border-border text-text-muted hover:text-text-secondary"
+              }`}
+            >
+              {role.replace("_", " ")}
+            </button>
+          ))}
+          {/* Active custom roles on this card not yet in deck list */}
+          {roles.filter(r => !AVAILABLE_ROLES.includes(r) && !deckRolesList.includes(r)).map(role => (
+            <button
+              key={role}
+              onClick={() => toggleRole(role)}
+              className="text-xxs px-2 py-0.5 rounded border border-accent-green text-accent-green bg-accent-green/10"
+            >
+              {role.replace("_", " ")} ✕
+            </button>
+          ))}
+        </div>
+        <div className="flex gap-1 mt-1.5">
+          <input
+            type="text"
+            placeholder="custom role..."
+            className="input-terminal text-xxs w-32"
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                const input = e.currentTarget;
+                const value = input.value.trim().toLowerCase().replace(/\s+/g, "_");
+                if (value && !roles.includes(value)) {
+                  toggleRole(value);
+                }
+                input.value = "";
+              }
+            }}
+          />
+          <span className="text-xxs text-text-muted self-center">enter to add</span>
+        </div>
+        {roles.length > 0 && (
+          <p className="text-xxs text-text-muted mt-1">
+            assigned: {roles.map(r => r.replace("_", " ")).join(", ")}
+          </p>
+        )}
       </div>
 
       {/* AI Context section */}
@@ -154,7 +271,6 @@ export default function CardDetail({ cardData, deckCard, onUpdateNotes }: Props)
           </div>
 
           <div className="space-y-2">
-            {/* Impact score */}
             {aiContext.impact_score && (
               <div className="flex items-center gap-2">
                 <span className="text-xs text-text-secondary">impact:</span>
@@ -167,39 +283,29 @@ export default function CardDetail({ cardData, deckCard, onUpdateNotes }: Props)
               </div>
             )}
 
-            {/* Role */}
             <div className="flex items-center gap-2 flex-wrap">
-              <span className="text-xs text-text-secondary">role:</span>
+              <span className="text-xs text-text-secondary">ai role:</span>
               <span className="text-xs text-text-primary bg-bg-tertiary px-1.5 py-0.5 rounded">
                 {aiContext.role}
               </span>
               {aiContext.secondary_roles?.map((role) => (
-                <span
-                  key={role}
-                  className="text-xxs text-text-muted bg-bg-tertiary px-1.5 py-0.5 rounded"
-                >
+                <span key={role} className="text-xxs text-text-muted bg-bg-tertiary px-1.5 py-0.5 rounded">
                   {role}
                 </span>
               ))}
             </div>
 
-            {/* Impact reason */}
             {aiContext.impact_reason && (
               <div>
                 <span className="text-xs text-text-secondary">assessment: </span>
-                <span className="text-xs text-text-primary">
-                  {aiContext.impact_reason}
-                </span>
+                <span className="text-xs text-text-primary">{aiContext.impact_reason}</span>
               </div>
             )}
 
-            {/* Synergy notes */}
             {aiContext.synergy_notes && (
               <div>
                 <span className="text-xs text-text-secondary">synergy: </span>
-                <span className="text-xs text-text-primary">
-                  {aiContext.synergy_notes}
-                </span>
+                <span className="text-xs text-text-primary">{aiContext.synergy_notes}</span>
               </div>
             )}
           </div>
@@ -225,9 +331,7 @@ export default function CardDetail({ cardData, deckCard, onUpdateNotes }: Props)
           >
             {saving ? "saving..." : "save notes"}
           </button>
-          {saved && (
-            <span className="text-accent-green text-xs">saved</span>
-          )}
+          {saved && <span className="text-accent-green text-xs">saved</span>}
         </div>
       </div>
     </div>

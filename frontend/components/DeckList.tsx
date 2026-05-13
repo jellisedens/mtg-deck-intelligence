@@ -34,22 +34,26 @@ function getCardType(card: DeckCard, cardData?: ScryfallCard): string {
 
 // ── Main component ───────────────────────────────────
 interface Props {
+  deckId: string;
   cards: DeckCard[];
   cardDataMap: Record<string, ScryfallCard>;
   onUpdateQuantity: (cardId: string, quantity: number) => Promise<string | null>;
   onRemoveCard: (cardId: string) => void;
   onChangeBoard: (cardId: string, board: string) => void;
   onUpdateNotes: (cardId: string, notes: string) => void;
+  onRolesUpdated?: () => void;
   format: string;
 }
 
 export default function DeckList({
+  deckId,
   cards,
   cardDataMap,
   onUpdateQuantity,
   onRemoveCard,
   onChangeBoard,
   onUpdateNotes,
+  onRolesUpdated,
   format,
 }: Props) {
   const totalCards = cards.reduce((sum, c) => sum + c.quantity, 0);
@@ -147,9 +151,11 @@ export default function DeckList({
                           key={card.id}
                           card={card}
                           cardData={cardDataMap[card.scryfall_id]}
+                          deckId={deckId}
                           onUpdateQuantity={onUpdateQuantity}
                           onRemoveCard={onRemoveCard}
                           onUpdateNotes={onUpdateNotes}
+                          onRolesUpdated={onRolesUpdated}
                           format={format}
                         />
                       ))}

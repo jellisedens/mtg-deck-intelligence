@@ -1,7 +1,9 @@
 from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-
+from simulation.custom_metrics import compute_custom_metrics
+from pydantic import BaseModel
+from typing import Optional
 from database.session import get_db
 from models.user import User
 from models.deck import Deck
@@ -12,6 +14,12 @@ from simulation.sim_tags import generate_sim_tags
 from simulation.hand_simulator import simulate_opening_hands, simulate_mulligan_sequence
 from simulation.game_engine import run_simulation
 from services.simulation_analyzer import analyze_simulation
+
+class CustomTrackingRequest(BaseModel):
+    track_roles: Optional[list[str]] = None
+    track_types: Optional[list[str]] = None
+    track_commander: Optional[dict] = None
+    track_cmc_slots: Optional[list[int]] = None
 
 router = APIRouter(prefix="/decks", tags=["simulation"])
 
@@ -260,3 +268,91 @@ async def regenerate_sim_tags_endpoint(
     db.commit()
 
     return {"status": "ok", "tags_generated": len(sim_tags)}
+
+@router.post("/{deck_id}/simulate/custom")
+async def simulate_with_custom_tracking(
+    deck_id: UUID,
+    tracking: CustomTrackingRequest,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    n_games: int = 500,
+    turns: int = 10,
+):
+    """Run simulation with custom metric tracking."""
+    if n_games < 1 or n_games > 1000:
+        raise HTTPException(status_code=400, detail="Games must be between 1 and 1000")
+
+    main_deck, sim_tags = await _build_deck_for_simulation(deck_id, user, db)
+
+    # Run standard simulation for base results
+    standard_results = run_simulation(
+        deck_cards=main_deck,
+        sim_tags=sim_tags,
+        n_games=n_games,
+        turns=turns,
+    )
+
+    # Run separate games for custom tracking
+    from simulation.game_engine import simulate_game
+    all_games = []
+    for _ in range(n_games):
+        game = simulate_game(main_deck, sim_tags, turns)
+        all_games.append(game)
+
+    # Compute custom metrics
+    tracking_options = tracking.model_dump(exclude_none=True)
+    
+    # Auto-detect commander for castability tracking
+    if tracking_options.get("track_commander") is not None:
+        deck = db.query(Deck).filter(Deck.id == deck_id).first()
+        commander_cards = db.query(DeckCard).filter(
+            DeckCard.deck_id == deck_id,
+            DeckCard.board == "commander",
+        ).all()
+        if commander_cards:
+            cmd_card = commander_cards[0]
+            # Find commander data in the fetched card data
+            for card_entry in main_deck:
+                pass  # main_deck only has non-commander cards
+            # Fetch commander data from Scryfall
+            cmd_identifiers = [{"id": cmd_card.scryfall_id}]
+            cmd_data_resp = await scryfall_service.get_collection(cmd_identifiers)
+            cmd_data_list = cmd_data_resp.get("data", [])
+            if cmd_data_list:
+                cmd_data = cmd_data_list[0]
+                cmd_cmc = int(cmd_data.get("cmc", 0))
+                # Parse color requirements from mana cost
+                mana_cost = cmd_data.get("mana_cost", "")
+                color_reqs = {}
+                for color in ["W", "U", "B", "R", "G"]:
+                    count = mana_cost.count("{" + color + "}")
+                    if count > 0:
+                        color_reqs[color] = count
+                tracking_options["track_commander"] = {
+                    "cmc": cmd_cmc,
+                    "colors": color_reqs,
+                    "name": cmd_data.get("name", "Commander"),
+                }
+            else:
+                del tracking_options["track_commander"]
+        else:
+            del tracking_options["track_commander"]
+    # Build role map from user-tagged cards
+    deck_cards_db = db.query(DeckCard).filter(DeckCard.deck_id == deck_id).all()
+    user_role_map = {}
+    for card in deck_cards_db:
+        ai_ctx = card.ai_context or {}
+        card_roles = ai_ctx.get("roles", [])
+        if card_roles:
+            user_role_map[card.card_name.lower()] = card_roles
+
+    custom_metrics = compute_custom_metrics(
+        all_games=all_games,
+        tracking_options=tracking_options,
+        deck_cards=main_deck,
+        sim_tags=sim_tags,
+        user_role_map=user_role_map,
+    )
+
+    standard_results["custom_metrics"] = custom_metrics
+    return standard_results

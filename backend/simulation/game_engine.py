@@ -330,6 +330,21 @@ def simulate_game(deck_cards: list, sim_tags: dict, turns: int = 10,
         post_land_castable = sum(1 for c in state.hand
                                  if not c.get("sim_tags", {}).get("is_land") and state.can_cast(c))
 
+        # Castability tracking — what can we actually cast right now
+        castable_by_type = defaultdict(int)
+        castable_ramp = 0
+        castable_draw = 0
+        for c in state.hand:
+            if c.get("sim_tags", {}).get("is_land"):
+                continue
+            if state.can_cast(c):
+                for t in _get_card_types(c):
+                    castable_by_type[t] += 1
+                if _is_ramp_card(c):
+                    castable_ramp += 1
+                if _is_draw_card(c):
+                    castable_draw += 1
+
         # CAST SPELLS in priority order
         _cast_spells(state)
 
@@ -370,6 +385,9 @@ def simulate_game(deck_cards: list, sim_tags: dict, turns: int = 10,
             "draw_types": {t: True for t in _get_card_types(drawn_this_turn)} if drawn_this_turn else {},
             "draw_is_ramp": _is_ramp_card(drawn_this_turn) if drawn_this_turn else False,
             "draw_is_draw": _is_draw_card(drawn_this_turn) if drawn_this_turn else False,
+            "castable_by_type": dict(castable_by_type),
+            "castable_ramp": castable_ramp,
+            "castable_draw": castable_draw,
         }
         turn_snapshots.append(snapshot)
 
@@ -644,7 +662,8 @@ def run_simulation(deck_cards, sim_tags, n_games=100, turns=10, min_lands=2, max
                         continue
                     if key in ("cumulative_types_seen", "cumulative_ramp_seen",
                                "cumulative_draw_seen", "total_cards_seen",
-                               "draw_types", "draw_is_ramp", "draw_is_draw"):
+                               "draw_types", "draw_is_ramp", "draw_is_draw",
+                               "castable_by_type", "castable_ramp", "castable_draw"):
                         continue
                     turn_stats[key] += value
 

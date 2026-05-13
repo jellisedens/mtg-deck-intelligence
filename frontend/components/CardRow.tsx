@@ -8,18 +8,22 @@ import CardDetail from "./CardDetail";
 interface Props {
   card: DeckCard;
   cardData?: ScryfallCard;
+  deckId: string;
   onUpdateQuantity: (cardId: string, quantity: number) => Promise<string | null>;
   onRemoveCard: (cardId: string) => void;
   onUpdateNotes: (cardId: string, notes: string) => void;
+  onRolesUpdated?: () => void;
   format: string;
 }
 
 export default function CardRow({
   card,
   cardData,
+  deckId,
   onUpdateQuantity,
   onRemoveCard,
   onUpdateNotes,
+  onRolesUpdated,
   format,
 }: Props) {
   const [expanded, setExpanded] = useState(false);
@@ -118,7 +122,9 @@ export default function CardRow({
           <CardDetail
             cardData={cardData}
             deckCard={card}
+            deckId={deckId}
             onUpdateNotes={onUpdateNotes}
+            onRolesUpdated={onRolesUpdated}
           />
         </div>
       )}

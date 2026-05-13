@@ -17,6 +17,35 @@ interface SimConfig {
   maxLands: number;
 }
 
+interface TrackingConfig {
+  trackTypes: string[];
+  trackRoles: string[];
+  trackCommander: boolean;
+  trackCmcSlots: number[];
+}
+
+interface CustomMetrics {
+  type_tracking?: Record<string, {
+    per_turn_probability: Record<string, number>;
+    per_turn_avg_count: Record<string, number>;
+  }>;
+  role_tracking?: Record<string, {
+    per_turn_probability: Record<string, number>;
+    per_turn_avg_count: Record<string, number>;
+    cards_in_deck: number;
+    card_names: string[];
+  }>;
+  commander_tracking?: {
+    commander_cmc: number;
+    colors_required: Record<string, number>;
+    per_turn_castable_pct: Record<string, number>;
+  };
+  cmc_tracking?: Record<string, {
+    cards_at_cmc: number;
+    per_turn_can_cast_pct: Record<string, number>;
+  }>;
+}
+
 interface SimResult {
   per_turn_averages: TurnData[];
   games_simulated: number;
@@ -30,7 +59,17 @@ interface SimResult {
     min_lands: number;
     max_lands: number;
   };
+  custom_metrics?: CustomMetrics;
 }
+
+const AVAILABLE_TYPES = ["Creature", "Instant", "Sorcery", "Enchantment", "Artifact", "Planeswalker"];
+interface DeckRole {
+  role: string;
+  count: number;
+  cards: string[];
+}
+const AVAILABLE_CMC = [1, 2, 3, 4, 5, 6, 7];
+
 
 export default function GameSimulator({ deckId, onClose }: Props) {
   const [config, setConfig] = useState<SimConfig>({
@@ -39,10 +78,66 @@ export default function GameSimulator({ deckId, onClose }: Props) {
     minLands: 2,
     maxLands: 5,
   });
+  const [tracking, setTracking] = useState<TrackingConfig>({
+    trackTypes: [],
+    trackRoles: [],
+    trackCommander: false,
+    trackCmcSlots: [],
+  });
+  const [showTracking, setShowTracking] = useState(false);
   const [result, setResult] = useState<SimResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [elapsed, setElapsed] = useState(0);
   const [error, setError] = useState("");
+  const [deckRoles, setDeckRoles] = useState<DeckRole[]>([]);
+  const [rolesLoaded, setRolesLoaded] = useState(false);
+
+  function toggleType(type: string) {
+    setTracking(prev => ({
+      ...prev,
+      trackTypes: prev.trackTypes.includes(type)
+        ? prev.trackTypes.filter(t => t !== type)
+        : [...prev.trackTypes, type],
+    }));
+  }
+
+  function toggleRole(role: string) {
+    setTracking(prev => ({
+      ...prev,
+      trackRoles: prev.trackRoles.includes(role)
+        ? prev.trackRoles.filter(r => r !== role)
+        : [...prev.trackRoles, role],
+    }));
+  }
+
+  function toggleCmc(cmc: number) {
+    setTracking(prev => ({
+      ...prev,
+      trackCmcSlots: prev.trackCmcSlots.includes(cmc)
+        ? prev.trackCmcSlots.filter(c => c !== cmc)
+        : [...prev.trackCmcSlots, cmc],
+    }));
+  }
+
+  async function fetchDeckRoles() {
+    if (rolesLoaded) return;
+    try {
+      const token = localStorage.getItem("mtg_token");
+      const res = await fetch(`${API_BASE}/decks/${deckId}/roles`, {
+        headers: { Authorization: `Bearer ${token || ""}` },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setDeckRoles(data.roles || []);
+      }
+    } catch {
+      // silent
+    } finally {
+      setRolesLoaded(true);
+    }
+  }
+
+  const hasCustomTracking = tracking.trackTypes.length > 0 || tracking.trackRoles.length > 0 || tracking.trackCommander || tracking.trackCmcSlots.length > 0;
 
   async function runSimulation() {
     setLoading(true);
@@ -55,32 +150,68 @@ export default function GameSimulator({ deckId, onClose }: Props) {
 
     try {
       const token = typeof window !== "undefined" ? localStorage.getItem("mtg_token") : null;
-      const params = new URLSearchParams({
-        n_games: String(config.games),
-        turns: String(config.turns),
-        min_lands: String(config.minLands),
-        max_lands: String(config.maxLands),
-      });
 
-      const res = await fetch(`${API_BASE}/decks/${deckId}/simulate/game?${params}`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-      });
+      let data;
 
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.detail || `Simulation failed: ${res.status}`);
+      if (hasCustomTracking) {
+        // Use custom tracking endpoint
+        const params = new URLSearchParams({
+          n_games: String(config.games),
+          turns: String(config.turns),
+        });
+
+        const trackingBody: Record<string, unknown> = {};
+        if (tracking.trackTypes.length > 0) trackingBody.track_types = tracking.trackTypes;
+        if (tracking.trackRoles.length > 0) trackingBody.track_roles = tracking.trackRoles;
+        if (tracking.trackCommander) trackingBody.track_commander = { cmc: 0, colors: {} }; // Will be filled by backend
+        if (tracking.trackCmcSlots.length > 0) trackingBody.track_cmc_slots = tracking.trackCmcSlots;
+
+        const res = await fetch(`${API_BASE}/decks/${deckId}/simulate/custom?${params}`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+          body: JSON.stringify(trackingBody),
+        });
+
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          throw new Error(body.detail || `Simulation failed: ${res.status}`);
+        }
+
+        data = await res.json();
+      } else {
+        // Standard simulation
+        const params = new URLSearchParams({
+          n_games: String(config.games),
+          turns: String(config.turns),
+          min_lands: String(config.minLands),
+          max_lands: String(config.maxLands),
+        });
+
+        const res = await fetch(`${API_BASE}/decks/${deckId}/simulate/game?${params}`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+        });
+
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          throw new Error(body.detail || `Simulation failed: ${res.status}`);
+        }
+
+        data = await res.json();
       }
 
-      const data = await res.json();
       setResult({
         per_turn_averages: (data.per_turn_averages || []) as TurnData[],
         games_simulated: data.games_simulated || config.games,
         opening_hand_stats: data.opening_hand_stats,
         mulligan_settings: data.mulligan_settings,
+        custom_metrics: data.custom_metrics,
       });
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Simulation failed");
@@ -91,6 +222,7 @@ export default function GameSimulator({ deckId, onClose }: Props) {
   }
 
   const ohs = result?.opening_hand_stats;
+  const cm = result?.custom_metrics;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm" onClick={onClose}>
@@ -188,6 +320,109 @@ export default function GameSimulator({ deckId, onClose }: Props) {
                   </select>
                 </div>
               </div>
+            </div>
+
+            {/* Custom Tracking */}
+            <div className="border-t border-border pt-3">
+              <button
+                onClick={() => {
+                  setShowTracking(!showTracking);
+                  if (!showTracking) fetchDeckRoles();
+                }}
+                className="text-xs text-text-muted hover:text-text-secondary transition-colors"
+              >
+                {showTracking ? "▲ hide" : "▼ show"} custom tracking options
+              </button>
+
+              {showTracking && (
+                <div className="mt-3 space-y-3">
+                  {/* Card Type Tracking */}
+                  <div>
+                    <span className="text-xxs text-text-muted uppercase tracking-wider">track card types drawn</span>
+                    <div className="flex flex-wrap gap-2 mt-1">
+                      {AVAILABLE_TYPES.map(type => (
+                        <button
+                          key={type}
+                          onClick={() => toggleType(type)}
+                          className={`text-xxs px-2 py-1 rounded border transition-colors ${
+                            tracking.trackTypes.includes(type)
+                              ? "border-accent-green text-accent-green bg-accent-green/10"
+                              : "border-border text-text-muted hover:text-text-secondary"
+                          }`}
+                        >
+                          {type}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Role Tracking — dynamic from user-tagged cards */}
+                  <div>
+                    <span className="text-xxs text-text-muted uppercase tracking-wider">track role availability</span>
+                    {deckRoles.length > 0 ? (
+                      <div className="flex flex-wrap gap-2 mt-1">
+                        {deckRoles.map(dr => (
+                          <button
+                            key={dr.role}
+                            onClick={() => toggleRole(dr.role)}
+                            className={`text-xxs px-2 py-1 rounded border transition-colors ${
+                              tracking.trackRoles.includes(dr.role)
+                                ? "border-accent-green text-accent-green bg-accent-green/10"
+                                : "border-border text-text-muted hover:text-text-secondary"
+                            }`}
+                          >
+                            {dr.role.replace("_", " ")} ({dr.count})
+                          </button>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="text-xxs text-text-muted mt-1">
+                        no roles tagged yet — expand cards in the deck list and assign roles to enable tracking
+                      </p>
+                    )}
+                  </div>
+
+                  {/* Commander Castability */}
+                  <div>
+                    <button
+                      onClick={() => setTracking(prev => ({ ...prev, trackCommander: !prev.trackCommander }))}
+                      className={`text-xxs px-2 py-1 rounded border transition-colors ${
+                        tracking.trackCommander
+                          ? "border-accent-green text-accent-green bg-accent-green/10"
+                          : "border-border text-text-muted hover:text-text-secondary"
+                      }`}
+                    >
+                      track commander castability
+                    </button>
+                  </div>
+
+                  {/* CMC Slot Tracking */}
+                  <div>
+                    <span className="text-xxs text-text-muted uppercase tracking-wider">track CMC slot availability</span>
+                    <div className="flex flex-wrap gap-2 mt-1">
+                      {AVAILABLE_CMC.map(cmc => (
+                        <button
+                          key={cmc}
+                          onClick={() => toggleCmc(cmc)}
+                          className={`text-xxs px-2 py-1 rounded border transition-colors ${
+                            tracking.trackCmcSlots.includes(cmc)
+                              ? "border-accent-green text-accent-green bg-accent-green/10"
+                              : "border-border text-text-muted hover:text-text-secondary"
+                          }`}
+                        >
+                          {cmc} CMC
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {hasCustomTracking && (
+                    <p className="text-xxs text-accent-green">
+                      custom tracking enabled — simulation will include additional metrics
+                    </p>
+                  )}
+                </div>
+              )}
             </div>
 
             <div className="text-xxs text-text-muted space-y-1">
@@ -333,6 +568,153 @@ export default function GameSimulator({ deckId, onClose }: Props) {
               turnData={result.per_turn_averages}
               gamesSimulated={result.games_simulated}
             />
+
+            {/* Custom Metrics Results */}
+            {cm && (
+              <div className="space-y-3">
+                <div className="text-xxs text-text-muted font-medium uppercase tracking-wider">
+                  Custom Tracking Results
+                </div>
+
+                {/* Type Tracking */}
+                {cm.type_tracking && Object.entries(cm.type_tracking).map(([type, data]) => {
+                  const d = data as Record<string, unknown>;
+                  const drawnPct = (d.per_turn_drawn_pct || d.per_turn_probability || {}) as Record<string, number>;
+                  const castablePct = d.per_turn_castable_pct as Record<string, number> | undefined;
+                  return (
+                    <div key={type} className="bg-bg-primary border border-border rounded p-3">
+                      <div className="text-xs text-text-primary font-medium mb-2">{type} by turn</div>
+                      <div className="text-xxs text-text-muted mb-1">drawn</div>
+                      <div className="flex gap-1 flex-wrap">
+                        {Object.entries(drawnPct).map(([turn, pct]) => (
+                          <div key={turn} className="text-center min-w-[40px]">
+                            <div className={`text-xs font-bold ${pct >= 80 ? "text-accent-green" : pct >= 50 ? "text-accent-yellow" : "text-accent-red"}`}>
+                              {pct}%
+                            </div>
+                            <div className="text-xxs text-text-muted">T{turn}</div>
+                          </div>
+                        ))}
+                      </div>
+                      {castablePct && (
+                        <>
+                          <div className="text-xxs text-text-muted mt-2 mb-1">castable in hand <span className="text-text-muted/50">(drops as cards are cast)</span></div>
+                          <div className="flex gap-1 flex-wrap">
+                            {Object.entries(castablePct).map(([turn, pct]) => (
+                              <div key={turn} className="text-center min-w-[40px]">
+                                <div className={`text-xs font-bold ${pct >= 80 ? "text-accent-green" : pct >= 50 ? "text-accent-yellow" : "text-accent-red"}`}>
+                                  {pct}%
+                                </div>
+                                <div className="text-xxs text-text-muted">T{turn}</div>
+                              </div>
+                            ))}
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  );
+                })}
+
+                {/* Role Tracking */}
+                {cm.role_tracking && Object.entries(cm.role_tracking).map(([role, data]) => {
+                  const d = data as Record<string, unknown>;
+                  const drawnPct = (d.per_turn_drawn_pct || {}) as Record<string, number>;
+                  const castablePct = d.per_turn_castable_pct as Record<string, number> | undefined;
+                  const cardNames = (d.card_names || []) as string[];
+                  const cardsInDeck = (d.cards_in_deck || 0) as number;
+                  const hasDrawnData = Object.values(drawnPct).some(v => v > 0);
+
+                  return (
+                    <div key={role} className="bg-bg-primary border border-border rounded p-3">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-xs text-text-primary font-medium">{role.replace("_", " ")}</span>
+                        <span className="text-xxs text-text-muted">{cardsInDeck} cards in deck</span>
+                      </div>
+                      {hasDrawnData ? (
+                        <>
+                          <div className="text-xxs text-text-muted mb-1">drawn</div>
+                          <div className="flex gap-1 flex-wrap">
+                            {Object.entries(drawnPct).map(([turn, pct]) => (
+                              <div key={turn} className="text-center min-w-[40px]">
+                                <div className={`text-xs font-bold ${pct >= 80 ? "text-accent-green" : pct >= 50 ? "text-accent-yellow" : "text-accent-red"}`}>
+                                  {pct}%
+                                </div>
+                                <div className="text-xxs text-text-muted">T{turn}</div>
+                              </div>
+                            ))}
+                          </div>
+                          {castablePct && Object.values(castablePct).some(v => v > 0) && (
+                            <>
+                              <div className="text-xxs text-text-muted mt-2 mb-1">castable in hand <span className="text-text-muted/50">(drops as cards are cast)</span></div>
+                              <div className="flex gap-1 flex-wrap">
+                                {Object.entries(castablePct).map(([turn, pct]) => (
+                                  <div key={turn} className="text-center min-w-[40px]">
+                                    <div className={`text-xs font-bold ${pct >= 80 ? "text-accent-green" : pct >= 50 ? "text-accent-yellow" : "text-accent-red"}`}>
+                                      {pct}%
+                                    </div>
+                                    <div className="text-xxs text-text-muted">T{turn}</div>
+                                  </div>
+                                ))}
+                              </div>
+                            </>
+                          )}
+                        </>
+                      ) : (
+                        <div className="text-xxs text-text-muted">
+                          per-turn tracking not available — card count only
+                        </div>
+                      )}
+                      {cardNames.length > 0 && (
+                        <div className="mt-2 text-xxs text-text-muted">
+                          cards: {cardNames.join(", ")}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+
+                {/* Commander Tracking */}
+                {cm.commander_tracking && (
+                  <div className="bg-bg-primary border border-border rounded p-3">
+                    <div className="text-xs text-text-primary font-medium mb-2">
+                      {(cm.commander_tracking as Record<string, unknown>).name
+                        ? `${(cm.commander_tracking as Record<string, unknown>).name} castability (CMC ${cm.commander_tracking.commander_cmc})`
+                        : `commander castability (CMC ${cm.commander_tracking.commander_cmc})`
+                      }
+                    </div>
+                    <div className="flex gap-1 flex-wrap">
+                      {Object.entries(cm.commander_tracking.per_turn_castable_pct).map(([turn, pct]) => (
+                        <div key={turn} className="text-center min-w-[40px]">
+                          <div className={`text-xs font-bold ${pct >= 80 ? "text-accent-green" : pct >= 50 ? "text-accent-yellow" : "text-accent-red"}`}>
+                            {pct}%
+                          </div>
+                          <div className="text-xxs text-text-muted">T{turn}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* CMC Slot Tracking */}
+                {cm.cmc_tracking && Object.entries(cm.cmc_tracking).map(([cmc, data]) => (
+                  <div key={cmc} className="bg-bg-primary border border-border rounded p-3">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-xs text-text-primary font-medium">{cmc}-drop castability</span>
+                      <span className="text-xxs text-text-muted">{data.cards_at_cmc} cards at CMC {cmc}</span>
+                    </div>
+                    <div className="flex gap-1 flex-wrap">
+                      {Object.entries(data.per_turn_can_cast_pct).map(([turn, pct]) => (
+                        <div key={turn} className="text-center min-w-[40px]">
+                          <div className={`text-xs font-bold ${pct >= 80 ? "text-accent-green" : pct >= 50 ? "text-accent-yellow" : "text-accent-red"}`}>
+                            {pct}%
+                          </div>
+                          <div className="text-xxs text-text-muted">T{turn}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
 
             {/* Run again */}
             <div className="flex gap-3 justify-center pt-2">

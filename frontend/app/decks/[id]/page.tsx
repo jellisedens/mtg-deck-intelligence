@@ -259,12 +259,14 @@ function DeckBuilderContent({ deckId }: { deckId: string }) {
         <div className="lg:col-span-2 space-y-4">
           <CardSearch onAddCard={handleAddCard} />
           <DeckList
+            deckId={deckId}
             cards={deck.cards || []}
             cardDataMap={cardDataMap}
             onUpdateQuantity={handleUpdateQuantity}
             onRemoveCard={handleRemoveCard}
             onChangeBoard={handleChangeBoard}
             onUpdateNotes={handleUpdateNotes}
+            onRolesUpdated={() => loadDeck()}
             format={deck.format}
           />
         </div>

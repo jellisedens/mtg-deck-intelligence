@@ -388,6 +388,9 @@ def simulate_game(deck_cards: list, sim_tags: dict, turns: int = 10,
             "castable_by_type": dict(castable_by_type),
             "castable_ramp": castable_ramp,
             "castable_draw": castable_draw,
+            "hand_card_names": [c.get("name", "").lower() for c in state.hand if not c.get("sim_tags", {}).get("is_land")],
+            "castable_cards": [c.get("name", "").lower() for c in state.hand if not c.get("sim_tags", {}).get("is_land") and state.can_cast(c)],
+            "cards_seen_names": [c.get("name", "").lower() for c in cards_seen if not c.get("sim_tags", {}).get("is_land")],
         }
         turn_snapshots.append(snapshot)
 
@@ -663,7 +666,8 @@ def run_simulation(deck_cards, sim_tags, n_games=100, turns=10, min_lands=2, max
                     if key in ("cumulative_types_seen", "cumulative_ramp_seen",
                                "cumulative_draw_seen", "total_cards_seen",
                                "draw_types", "draw_is_ramp", "draw_is_draw",
-                               "castable_by_type", "castable_ramp", "castable_draw"):
+                               "castable_by_type", "castable_ramp", "castable_draw",
+                               "cards_in_hand", "cards_seen_names", "castable_cards", "hand_card_names"):
                         continue
                     turn_stats[key] += value
 

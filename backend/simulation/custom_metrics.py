@@ -93,8 +93,20 @@ def _track_roles(all_games: list, roles: list, turns: int, n_games: int, deck_ca
                     if castable > 0:
                         per_turn_castable[turn_num] += 1
                 else:
-                    # User-tagged roles — card count only for now
-                    pass
+                    # User-tagged roles — use card names from snapshot
+                    seen_names = snapshot.get("cards_seen_names", [])
+                    castable_names = snapshot.get("castable_cards", [])
+                    
+                    # Count how many role cards have been seen
+                    seen_count = sum(1 for name in seen_names if name in role_card_names)
+                    if seen_count > 0:
+                        per_turn_drawn[turn_num] += 1
+                    per_turn_count[turn_num] += seen_count
+                    
+                    # Count how many role cards are castable in hand
+                    castable_count = sum(1 for name in castable_names if name in role_card_names)
+                    if castable_count > 0:
+                        per_turn_castable[turn_num] += 1
         
         tracking[role] = {
             "per_turn_drawn_pct": {

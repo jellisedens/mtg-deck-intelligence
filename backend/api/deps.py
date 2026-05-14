@@ -46,3 +46,17 @@ def get_current_user(
         )
 
     return user
+
+def get_verified_user(
+    user: User = Depends(get_current_user),
+) -> User:
+    """
+    Same as get_current_user but also requires email verification.
+    Use this for expensive endpoints (AI suggest, simulation, strategy).
+    """
+    if not user.is_verified:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Email verification required. Check your inbox or request a new verification email.",
+        )
+    return user

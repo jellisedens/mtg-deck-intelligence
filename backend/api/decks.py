@@ -583,15 +583,17 @@ async def auto_suggest_roles(
         # Ramp detection
         if any(phrase in oracle for phrase in [
             "add {", "add one mana", "search your library for a basic land",
-            "search your library for a land", "put it onto the battlefield",
+            "search your library for a land",
             "additional land", "mana of any", "mana of that color",
             "search your library for up to", "untap target land",
-            "add an amount of {", "add mana", "for each land",
-            "untap target forest", "put a land", "land onto the battlefield",
+            "add an amount of {", "add mana",
+            "untap target forest", "put a land",
             "search your library for a forest", "search your library for a basic",
         ]):
-            if "Land" not in type_line:
-                suggested_roles.append("ramp")
+            # Exclude cards that give ramp to opponents
+            if "opponent" not in oracle and "their library" not in oracle:
+                if "Land" not in type_line:
+                    suggested_roles.append("ramp")
         # Catch mana dorks
         if "creature" in type_line.lower() and ("add {" in oracle or "add one mana" in oracle):
             if "ramp" not in suggested_roles:
@@ -604,14 +606,16 @@ async def auto_suggest_roles(
         # Artifact lands
         if "Artifact" in type_line and "Land" in type_line:
             suggested_roles.append("utility")
-            
-        # Cost reducers are ramp
+
+        # Cost reducers are ramp (but not self-discount like undaunted)
         if any(phrase in oracle for phrase in [
-            "cost {1} less", "cost {2} less", "costs {1} less", "costs {2} less",
-            "spells you cast cost", "cost less to cast", "reduce the cost",
+            "spells you cast cost", "cost less to cast",
+            "reduce the cost",
         ]):
-            if "ramp" not in suggested_roles:
-                suggested_roles.append("ramp")
+            # Exclude self-discount (undaunted, "this spell costs")
+            if "this spell cost" not in oracle and "undaunted" not in oracle:
+                if "ramp" not in suggested_roles:
+                    suggested_roles.append("ramp")
 
         # Card draw
         if any(phrase in oracle for phrase in [

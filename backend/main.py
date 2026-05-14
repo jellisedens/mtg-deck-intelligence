@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from middleware.rate_limit import RateLimitMiddleware
 from api.health import router as health_router
 from api.scryfall import router as scryfall_router
 from api.auth import router as auth_router
@@ -17,6 +18,9 @@ app = FastAPI(
     description="AI-powered Magic: The Gathering deck building and analytics",
     version="0.1.0",
 )
+
+# Rate limiting — runs before CORS to reject spam early
+app.add_middleware(RateLimitMiddleware)
 
 # CORS — allow frontend dev server to call the API
 app.add_middleware(

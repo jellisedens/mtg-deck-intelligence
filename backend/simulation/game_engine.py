@@ -345,6 +345,12 @@ def simulate_game(deck_cards: list, sim_tags: dict, turns: int = 10,
                 if _is_draw_card(c):
                     castable_draw += 1
 
+        # Capture castable card names before casting
+        pre_cast_castable_names = [c.get("name", "").lower() for c in state.hand if not c.get("sim_tags", {}).get("is_land") and state.can_cast(c)]
+
+        # CAST SPELLS in priority order
+        _cast_spells(state)
+
         # CAST SPELLS in priority order
         _cast_spells(state)
 
@@ -389,7 +395,7 @@ def simulate_game(deck_cards: list, sim_tags: dict, turns: int = 10,
             "castable_ramp": castable_ramp,
             "castable_draw": castable_draw,
             "hand_card_names": [c.get("name", "").lower() for c in state.hand if not c.get("sim_tags", {}).get("is_land")],
-            "castable_cards": [c.get("name", "").lower() for c in state.hand if not c.get("sim_tags", {}).get("is_land") and state.can_cast(c)],
+            "castable_cards": pre_cast_castable_names,
             "cards_seen_names": [c.get("name", "").lower() for c in cards_seen if not c.get("sim_tags", {}).get("is_land")],
         }
         turn_snapshots.append(snapshot)

@@ -68,7 +68,6 @@ interface DeckRole {
   count: number;
   cards: string[];
 }
-const AVAILABLE_CMC = [1, 2, 3, 4, 5, 6, 7];
 
 
 export default function GameSimulator({ deckId, onClose }: Props) {
@@ -396,25 +395,7 @@ export default function GameSimulator({ deckId, onClose }: Props) {
                     </button>
                   </div>
 
-                  {/* CMC Slot Tracking */}
-                  <div>
-                    <span className="text-xxs text-text-muted uppercase tracking-wider">track CMC slot availability</span>
-                    <div className="flex flex-wrap gap-2 mt-1">
-                      {AVAILABLE_CMC.map(cmc => (
-                        <button
-                          key={cmc}
-                          onClick={() => toggleCmc(cmc)}
-                          className={`text-xxs px-2 py-1 rounded border transition-colors ${
-                            tracking.trackCmcSlots.includes(cmc)
-                              ? "border-accent-green text-accent-green bg-accent-green/10"
-                              : "border-border text-text-muted hover:text-text-secondary"
-                          }`}
-                        >
-                          {cmc} CMC
-                        </button>
-                      ))}
-                    </div>
-                  </div>
+                  
 
                   {hasCustomTracking && (
                     <p className="text-xxs text-accent-green">
@@ -580,6 +561,8 @@ export default function GameSimulator({ deckId, onClose }: Props) {
                 {cm.type_tracking && Object.entries(cm.type_tracking).map(([type, data]) => {
                   const d = data as Record<string, unknown>;
                   const drawnPct = (d.per_turn_drawn_pct || d.per_turn_probability || {}) as Record<string, number>;
+                  const hasAnyData = Object.values(drawnPct).some(v => v > 0);
+                  if (!hasAnyData) return null;
                   const castablePct = d.per_turn_castable_pct as Record<string, number> | undefined;
                   return (
                     <div key={type} className="bg-bg-primary border border-border rounded p-3">
@@ -665,7 +648,7 @@ export default function GameSimulator({ deckId, onClose }: Props) {
                       )}
                       {cardNames.length > 0 && (
                         <div className="mt-2 text-xxs text-text-muted">
-                          cards: {cardNames.join(", ")}
+                          cards: {cardNames.map(n => n.split(" // ")[0]).join(", ")}
                         </div>
                       )}
                     </div>
@@ -693,26 +676,6 @@ export default function GameSimulator({ deckId, onClose }: Props) {
                     </div>
                   </div>
                 )}
-
-                {/* CMC Slot Tracking */}
-                {cm.cmc_tracking && Object.entries(cm.cmc_tracking).map(([cmc, data]) => (
-                  <div key={cmc} className="bg-bg-primary border border-border rounded p-3">
-                    <div className="flex items-center justify-between mb-2">
-                      <span className="text-xs text-text-primary font-medium">{cmc}-drop castability</span>
-                      <span className="text-xxs text-text-muted">{data.cards_at_cmc} cards at CMC {cmc}</span>
-                    </div>
-                    <div className="flex gap-1 flex-wrap">
-                      {Object.entries(data.per_turn_can_cast_pct).map(([turn, pct]) => (
-                        <div key={turn} className="text-center min-w-[40px]">
-                          <div className={`text-xs font-bold ${pct >= 80 ? "text-accent-green" : pct >= 50 ? "text-accent-yellow" : "text-accent-red"}`}>
-                            {pct}%
-                          </div>
-                          <div className="text-xxs text-text-muted">T{turn}</div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                ))}
               </div>
             )}
 

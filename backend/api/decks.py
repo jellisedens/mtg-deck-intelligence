@@ -527,3 +527,191 @@ def get_deck_roles(
             for role, count in sorted(role_counts.items(), key=lambda x: -x[1])
         ]
     }
+
+
+@router.post("/{deck_id}/roles/auto-suggest")
+async def auto_suggest_roles(
+    deck_id: UUID,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Auto-suggest roles for all cards based on oracle text analysis."""
+    deck = db.query(Deck).filter(Deck.id == deck_id).first()
+    if not deck:
+        raise HTTPException(status_code=404, detail="Deck not found")
+    if deck.user_id != user.id:
+        raise HTTPException(status_code=403, detail="Not your deck")
+
+    from services.scryfall import scryfall_service
+
+    cards = db.query(DeckCard).filter(DeckCard.deck_id == deck.id).all()
+    
+    # Only suggest for cards without existing roles
+    untagged = [c for c in cards if not (c.ai_context or {}).get("roles")]
+    if not untagged:
+        return {"status": "all cards already tagged", "updated": 0}
+
+    # Fetch card data from Scryfall in batches
+    card_lookup = {}
+    batch_size = 10
+    for i in range(0, len(untagged), batch_size):
+        batch = untagged[i:i + batch_size]
+        identifiers = [{"id": c.scryfall_id} for c in batch]
+        scryfall_data = await scryfall_service.get_collection(identifiers)
+        for c in scryfall_data.get("data", []):
+            card_lookup[c["id"]] = c
+
+    updated = 0
+    for card in untagged:
+        card_data = card_lookup.get(card.scryfall_id)
+        if not card_data:
+            continue
+        
+        oracle = (card_data.get("oracle_text") or "").lower()
+        # Handle double-faced cards
+        if not oracle and card_data.get("card_faces"):
+            face_texts = [f.get("oracle_text", "") for f in card_data["card_faces"]]
+            oracle = " ".join(face_texts).lower()
+        type_line = (card_data.get("type_line") or "")
+        cmc = card_data.get("cmc", 0)
+        suggested_roles = []
+
+        # Skip basic lands only
+        if "Basic" in type_line and "Land" in type_line:
+            continue
+
+        # Ramp detection
+        if any(phrase in oracle for phrase in [
+            "add {", "add one mana", "search your library for a basic land",
+            "search your library for a land", "put it onto the battlefield",
+            "additional land", "mana of any", "mana of that color",
+            "search your library for up to", "untap target land",
+            "add an amount of {", "add mana", "for each land",
+            "untap target forest", "put a land", "land onto the battlefield",
+            "search your library for a forest", "search your library for a basic",
+        ]):
+            if "Land" not in type_line:
+                suggested_roles.append("ramp")
+        # Catch mana dorks
+        if "creature" in type_line.lower() and ("add {" in oracle or "add one mana" in oracle):
+            if "ramp" not in suggested_roles:
+                suggested_roles.append("ramp")
+        # Catch enchant land ramp
+        if "enchant land" in oracle or ("enchant" in type_line.lower() and "add" in oracle and "mana" in oracle):
+            if "ramp" not in suggested_roles:
+                suggested_roles.append("ramp")
+
+        # Artifact lands
+        if "Artifact" in type_line and "Land" in type_line:
+            suggested_roles.append("utility")
+            
+        # Cost reducers are ramp
+        if any(phrase in oracle for phrase in [
+            "cost {1} less", "cost {2} less", "costs {1} less", "costs {2} less",
+            "spells you cast cost", "cost less to cast", "reduce the cost",
+        ]):
+            if "ramp" not in suggested_roles:
+                suggested_roles.append("ramp")
+
+        # Card draw
+        if any(phrase in oracle for phrase in [
+            "draw a card", "draw two", "draw three", "draw cards",
+            "draw x card", "draws a card", "draw that many",
+            "reveal the top", "put into your hand",
+        ]):
+            suggested_roles.append("card_draw")
+
+        # Removal
+        if any(phrase in oracle for phrase in [
+            "destroy target", "exile target", "destroy another",
+            "deals damage to any target", "deals damage to target",
+            "-x/-x", "fight", "counter target spell",
+            "destroy target artifact", "destroy target enchantment",
+            "counter target noncreature", "counter target",
+        ]):
+            suggested_roles.append("removal")
+
+        # Board wipe
+        if any(phrase in oracle for phrase in [
+            "destroy all", "exile all", "all creatures get -",
+            "deals damage to each creature", "each creature gets -",
+            "each player sacrifices", "destroy each",
+            "deals 13 damage to each creature",
+        ]):
+            suggested_roles.append("board_wipe")
+
+        # Protection
+        if any(phrase in oracle for phrase in [
+            "hexproof", "indestructible", "shroud", "protection from",
+            "can't be countered", "can't be destroyed", "prevent all damage",
+            "fog", "prevent the next", "prevent all combat damage",
+            "regenerate target", "regenerate",
+        ]):
+            suggested_roles.append("protection")
+
+        # Tutor (non-land search)
+        if "search your library" in oracle and not any(lt in oracle for lt in [
+            "land", "forest", "island", "mountain", "swamp", "plains",
+        ]):
+            suggested_roles.append("tutor")
+
+        # Recursion
+        if any(phrase in oracle for phrase in [
+            "return target", "return a", "from your graveyard to your hand",
+            "from your graveyard to the battlefield", "cast from your graveyard",
+            "return it to", "from a graveyard",
+        ]):
+            suggested_roles.append("recursion")
+
+        # Combo enablers
+        if any(phrase in oracle for phrase in [
+            "untap all", "untap each", "untap target artifact",
+            "untap target permanent", "storm",
+            "whenever you cast", "whenever a player casts",
+            "copy that spell", "cast it without paying",
+        ]):
+            suggested_roles.append("combo")
+
+        # Tokens
+        if "create" in oracle and "token" in oracle:
+            suggested_roles.append("tokens")
+
+        # # Finisher — creatures with big power or pump effects
+        if any(phrase in oracle for phrase in [
+            "each opponent", "deals x damage", "lose life equal",
+            "gain control", "extra turn", "trample",
+            "get +", "gets +", "double the power", "double target",
+            "power and toughness each equal", "double target creature",
+            "all creatures you control get", "creatures you control get +", "double target creature", "doubles",
+        ]):
+            suggested_roles.append("finisher")
+
+        # Overrun effects
+        if any(phrase in oracle for phrase in [
+            "creatures you control get +", "all creatures you control",
+            "each creature you control gets",
+        ]):
+            if "finisher" not in suggested_roles:
+                suggested_roles.append("finisher")
+
+        # Catch big creatures as finishers
+        power = card_data.get("power")
+        if power and power.isdigit() and int(power) >= 6:
+            if "finisher" not in suggested_roles:
+                suggested_roles.append("finisher")
+
+        # Utility — catch-all for unclassified nonland cards
+        if not suggested_roles:
+            if "Land" not in type_line or "//" in type_line:
+                suggested_roles.append("utility")
+
+        if suggested_roles:
+            ai_context = card.ai_context or {}
+            ai_context["roles"] = suggested_roles
+            card.ai_context = ai_context
+            flag_modified(card, "ai_context")
+            updated += 1
+
+    db.commit()
+
+    return {"status": "ok", "updated": updated, "skipped_tagged": len(cards) - len(untagged)}

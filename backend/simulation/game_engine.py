@@ -796,4 +796,5 @@ def run_simulation(deck_cards, sim_tags, n_games=100, turns=10, min_lands=2, max
         "mulligan_settings": {"min_lands": min_lands, "max_lands": max_lands},
         "opening_hand_stats": opening_hand_stats,
         "per_turn_averages": aggregated_turns,
+        "_raw_games": all_games,
     }

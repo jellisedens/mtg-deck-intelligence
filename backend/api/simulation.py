@@ -284,20 +284,16 @@ async def simulate_with_custom_tracking(
 
     main_deck, sim_tags = await _build_deck_for_simulation(deck_id, user, db)
 
-    # Run standard simulation for base results
+    # Run simulation once — reuse raw games for custom metrics
     standard_results = run_simulation(
         deck_cards=main_deck,
         sim_tags=sim_tags,
         n_games=n_games,
         turns=turns,
     )
-
-    # Run separate games for custom tracking
-    from simulation.game_engine import simulate_game
-    all_games = []
-    for _ in range(n_games):
-        game = simulate_game(main_deck, sim_tags, turns)
-        all_games.append(game)
+    
+    # Extract raw games for custom metrics, then remove from response
+    all_games = standard_results.pop("_raw_games", [])
 
     # Compute custom metrics
     tracking_options = tracking.model_dump(exclude_none=True)

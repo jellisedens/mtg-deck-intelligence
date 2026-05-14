@@ -52,8 +52,8 @@ def _track_roles(all_games: list, roles: list, turns: int, n_games: int, deck_ca
             if user_role_map and card_name in user_role_map:
                 for role in user_role_map[card_name]:
                     role_cards[role].add(card_name)
-            else:
-                # Fall back to sim_tags for ramp/draw
+            elif not user_role_map:
+                # Only fall back to sim_tags if NO user tags exist in the deck
                 tags = {}
                 if sim_tags:
                     tags = sim_tags.get(card_name, {})

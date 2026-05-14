@@ -171,6 +171,36 @@ function DeckBuilderContent({ deckId }: { deckId: string }) {
     }
   }
 
+  async function handleAutoTagRoles() {
+    if (!confirm(
+      "Auto-tag will analyze all untagged cards and assign roles based on oracle text.\n\n" +
+      "Cards you've already tagged will keep their current roles.\n\nProceed?"
+    )) return;
+
+    try {
+      const token = localStorage.getItem("mtg_token");
+      const res = await fetch(`${API_BASE}/decks/${deckId}/roles/auto-suggest`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.updated > 0) {
+          setActionError("");
+          await loadDeck();
+          alert(`Auto-tagged ${data.updated} cards. ${data.skipped_tagged} already tagged.`);
+        } else {
+          alert("All cards already have roles assigned.");
+        }
+      }
+    } catch {
+      setActionError("Failed to auto-tag roles");
+    }
+  }
+
   if (loading) {
     return (
       <div className="text-text-muted text-sm">
@@ -232,6 +262,12 @@ function DeckBuilderContent({ deckId }: { deckId: string }) {
             className="btn-ghost text-xs"
           >
             simulate games
+          </button>
+          <button
+            onClick={handleAutoTagRoles}
+            className="btn-ghost text-xs"
+          >
+            auto-tag roles
           </button>
         </div>
       </div>

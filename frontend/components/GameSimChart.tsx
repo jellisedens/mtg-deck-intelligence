@@ -166,22 +166,28 @@ function ManaTab({ turnData }: { turnData: TurnData[] }) {
         </thead>
         <tbody>
           {turnData.map((t) => {
-            const rampBonus = t.avg_total_mana_available - t.avg_lands_on_board;
+            const lands = t.avg_lands_on_board ?? 0;
+            const mana = t.avg_total_mana_available ?? 0;
+            const rampBonus = mana - lands;
+            const curveRate = t.mana_on_curve_rate ?? 0;
+            const spells = t.avg_spells_cast ?? 0;
+            const hand = t.avg_cards_in_hand ?? 0;
+            const stuck = t.avg_uncastable_cards ?? 0;
             return (
               <tr key={t.turn} className="border-b border-border/50 hover:bg-bg-hover transition-colors">
                 <td className="py-1.5 pr-2 text-text-secondary">T{t.turn}</td>
-                <td className="py-1.5 px-1 text-right text-accent-green">{t.avg_lands_on_board.toFixed(1)}</td>
-                <td className="py-1.5 px-1 text-right text-accent-blue">{t.avg_total_mana_available.toFixed(1)}</td>
+                <td className="py-1.5 px-1 text-right text-accent-green">{lands.toFixed(1)}</td>
+                <td className="py-1.5 px-1 text-right text-accent-blue">{mana.toFixed(1)}</td>
                 <td className={`py-1.5 px-1 text-right ${rampBonus >= 1 ? "text-accent-green" : "text-text-muted"}`}>
                   +{rampBonus.toFixed(1)}
                 </td>
-                <td className={`py-1.5 px-1 text-right ${grade(t.mana_on_curve_rate, 80, 60)}`}>
-                  {t.mana_on_curve_rate}%
+                <td className={`py-1.5 px-1 text-right ${grade(curveRate, 80, 60)}`}>
+                  {curveRate}%
                 </td>
-                <td className="py-1.5 px-1 text-right text-text-primary">{t.avg_spells_cast.toFixed(1)}</td>
-                <td className="py-1.5 px-1 text-right text-text-primary">{t.avg_cards_in_hand.toFixed(1)}</td>
-                <td className={`py-1.5 pl-1 text-right ${t.avg_uncastable_cards <= 1.5 ? "text-accent-green" : t.avg_uncastable_cards <= 3 ? "text-accent-yellow" : "text-accent-red"}`}>
-                  {t.avg_uncastable_cards.toFixed(1)}
+                <td className="py-1.5 px-1 text-right text-text-primary">{spells.toFixed(1)}</td>
+                <td className="py-1.5 px-1 text-right text-text-primary">{hand.toFixed(1)}</td>
+                <td className={`py-1.5 pl-1 text-right ${stuck <= 1.5 ? "text-accent-green" : stuck <= 3 ? "text-accent-yellow" : "text-accent-red"}`}>
+                  {stuck.toFixed(1)}
                 </td>
               </tr>
             );
@@ -373,10 +379,10 @@ function DrawsTab({ turnData }: { turnData: TurnData[] }) {
 function ChartView({ turnData }: { turnData: TurnData[] }) {
   const data = turnData.map((t) => ({
     turn: `T${t.turn}`,
-    lands: Number(t.avg_lands_on_board.toFixed(1)),
-    mana: Number(t.avg_total_mana_available.toFixed(1)),
-    creatures: Number(t.avg_creatures_on_board.toFixed(1)),
-    power: Number(t.avg_total_power_on_board.toFixed(1)),
+    lands: Number((t.avg_lands_on_board ?? 0).toFixed(1)),
+    mana: Number((t.avg_total_mana_available ?? 0).toFixed(1)),
+    creatures: Number((t.avg_creatures_on_board ?? 0).toFixed(1)),
+    power: Number((t.avg_total_power_on_board ?? 0).toFixed(1)),
   }));
 
   return (

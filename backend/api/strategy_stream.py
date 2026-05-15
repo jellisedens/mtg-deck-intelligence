@@ -310,6 +310,7 @@ async def stream_strategy_generation(
                 save_db = SessionLocal()
                 save_deck = save_db.query(Deck).filter(Deck.id == deck_id).first()
                 
+                
                 # Auto-version before regeneration
                 try:
                     max_v = save_db.query(func.max(DeckVersion.version_number)).filter(
@@ -332,7 +333,7 @@ async def stream_strategy_generation(
                     )
                     save_db.add(auto_v)
                 except Exception:
-                    pass  # Auto-versioning is non-critical
+                    save_db.rollback()  # Don't let version failure poison the transaction
 
                 save_deck.strategy_profile = profile
                 save_db.commit()

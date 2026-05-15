@@ -63,7 +63,7 @@ export default function ImportDeckModal({ onClose, onImported }: Props) {
         deck = await importText({
           name: textName.trim(),
           format: textFormat,
-          text: textList.trim(),
+          deck_text: textList.trim(),
         });
       }
 

@@ -291,6 +291,19 @@ async def stream_strategy_generation(
             profile["simulation_stale"] = False
             profile["cards_changed_since_regen"] = 0
 
+            # Trim bulky data before saving to database
+            if "sim_tags" in profile:
+                profile["sim_tags_count"] = len(profile["sim_tags"])
+                del profile["sim_tags"]
+            
+            if "cached_simulation" in profile:
+                cached = profile["cached_simulation"]
+                profile["cached_simulation"] = {
+                    "games_simulated": cached.get("games_simulated"),
+                    "turns_simulated": cached.get("turns_simulated"),
+                    "aggregate": cached.get("aggregate"),
+                }
+
             try:
                 from database.session import SessionLocal
                 from sqlalchemy import func

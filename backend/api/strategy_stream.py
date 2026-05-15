@@ -304,6 +304,14 @@ async def stream_strategy_generation(
                     "aggregate": cached.get("aggregate"),
                 }
 
+            import sys
+            profile_size = len(json.dumps(profile))
+            print(f"[STRATEGY] Profile size before save: {profile_size:,} chars")
+            for key in profile:
+                key_size = len(json.dumps(profile[key])) if profile[key] else 0
+                if key_size > 1000:
+                    print(f"[STRATEGY]   {key}: {key_size:,} chars")
+
             try:
                 from database.session import SessionLocal
                 from sqlalchemy import func

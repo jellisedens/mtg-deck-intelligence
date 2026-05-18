@@ -8,6 +8,7 @@ interface Props {
   hasProfile: boolean;
   onComplete: () => void;
   cardCount?: number;
+  strategy?: Record<string, unknown> | null;
 }
 
 interface ProgressStep {
@@ -16,7 +17,7 @@ interface ProgressStep {
   message: string;
 }
 
-export default function StrategyGenerator({ deckId, hasProfile, onComplete, cardCount }: Props) {
+export default function StrategyGenerator({ deckId, hasProfile, onComplete, cardCount, strategy: parentStrategy }: Props) {
   const [generating, setGenerating] = useState(false);
   const [progress, setProgress] = useState<ProgressStep | null>(null);
   const [error, setError] = useState("");
@@ -24,12 +25,10 @@ export default function StrategyGenerator({ deckId, hasProfile, onComplete, card
   const [profile, setProfile] = useState<Record<string, unknown> | null>(null);
 
   useEffect(() => {
-    if (hasProfile) {
-      getStrategy(deckId).then((data) => {
-        if (data) setProfile(data);
-      });
+    if (parentStrategy) {
+      setProfile(parentStrategy);
     }
-  }, [hasProfile, deckId, cardCount]);
+  }, [parentStrategy]);
 
   function handleGenerate() {
     setGenerating(true);

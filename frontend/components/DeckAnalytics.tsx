@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { getAnalytics, getStrategy } from "@/lib/api";
+import { getAnalytics } from "@/lib/api";
 import ManaCurveChart from "./ManaCurveChart";
 import ColorDistributionChart from "./ColorDistributionChart";
 import TypeDistributionChart from "./TypeDistributionChart";
@@ -11,9 +11,10 @@ import GameSimChart, { type TurnData } from "./GameSimChart";
 interface Props {
   deckId: string;
   cardCount: number;
+  strategy?: Record<string, unknown> | null;
 }
 
-export default function DeckAnalytics({ deckId, cardCount }: Props) {
+export default function DeckAnalytics({ deckId, cardCount, strategy: parentStrategy }: Props) {
   const [analytics, setAnalytics] = useState<Record<string, unknown> | null>(null);
   const [strategy, setStrategy] = useState<Record<string, unknown> | null>(null);
   const [loading, setLoading] = useState(true);
@@ -27,16 +28,10 @@ export default function DeckAnalytics({ deckId, cardCount }: Props) {
       }
 
       try {
-        const [analyticsResult, strategyResult] = await Promise.allSettled([
-          getAnalytics(deckId),
-          getStrategy(deckId),
-        ]);
-
-        if (analyticsResult.status === "fulfilled") {
-          setAnalytics(analyticsResult.value as unknown as Record<string, unknown>);
-        }
-        if (strategyResult.status === "fulfilled" && strategyResult.value) {
-          setStrategy(strategyResult.value);
+        const analyticsResult = await getAnalytics(deckId);
+        setAnalytics(analyticsResult as unknown as Record<string, unknown>);
+        if (parentStrategy) {
+          setStrategy(parentStrategy);
         }
       } catch (err: unknown) {
         setError(err instanceof Error ? err.message : "Failed to load analytics");

@@ -29,6 +29,7 @@ function DeckBuilderContent({ deckId }: { deckId: string }) {
   const [showHandSim, setShowHandSim] = useState(false);
   const [showGameSim, setShowGameSim] = useState(false);
   const [hasStrategy, setHasStrategy] = useState(false);
+  const [strategy, setStrategy] = useState<Record<string, unknown> | null>(null);
 
   const { cardDataMap, fetchCards, addCard: cacheCard, isLoading: cardsLoading } = useCardCache();
 
@@ -38,6 +39,7 @@ function DeckBuilderContent({ deckId }: { deckId: string }) {
       setDeck(data);
 
       const strat = await getStrategy(deckId);
+      setStrategy(strat);
       setHasStrategy(!!strat);
 
       if (data.cards && data.cards.length > 0) {
@@ -75,9 +77,7 @@ function DeckBuilderContent({ deckId }: { deckId: string }) {
       const refreshed = await getDeck(deckId);
       setDeck(refreshed);
       cacheCard(card);
-      const strat = await getStrategy(deckId);
-      setHasStrategy(!!strat);
-    } catch (err: unknown) {
+      } catch (err: unknown) {
       setActionError(
         err instanceof Error ? err.message : "Failed to add card"
       );
@@ -108,10 +108,7 @@ function DeckBuilderContent({ deckId }: { deckId: string }) {
       const refreshed = await getDeck(deckId);
       setDeck(refreshed);
       await fetchCards([scryfallId]);
-      // Re-check strategy status
-      const strat = await getStrategy(deckId);
-      setHasStrategy(!!strat);
-    } catch (err: unknown) {
+      } catch (err: unknown) {
       setActionError(
         err instanceof Error ? err.message : "Failed to add card"
       );
@@ -315,6 +312,7 @@ function DeckBuilderContent({ deckId }: { deckId: string }) {
             hasProfile={hasStrategy}
             onComplete={() => window.location.reload()}
             cardCount={deck.cards?.length || 0}
+            strategy={strategy}
           />
           <DeckPreferences
             deckId={deckId}
@@ -329,6 +327,7 @@ function DeckBuilderContent({ deckId }: { deckId: string }) {
           <DeckAnalytics
             deckId={deckId}
             cardCount={deck.cards?.reduce((sum, c) => sum + c.quantity, 0) || 0}
+            strategy={strategy}
           />
         </div>
       </div>

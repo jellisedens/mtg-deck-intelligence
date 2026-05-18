@@ -291,11 +291,15 @@ async def stream_strategy_generation(
             profile["simulation_stale"] = False
             profile["cards_changed_since_regen"] = 0
 
-            # Trim bulky data before saving to database
-            if "sim_tags" in profile:
-                profile["sim_tags_count"] = len(profile["sim_tags"])
-                del profile["sim_tags"]
-            
+            # Log profile size breakdown before any trimming
+            profile_size = len(json.dumps(profile))
+            print(f"[STRATEGY] Profile size before trim: {profile_size:,} chars")
+            for key in sorted(profile.keys()):
+                key_size = len(json.dumps(profile[key])) if profile[key] else 0
+                if key_size > 1000:
+                    print(f"[STRATEGY]   {key}: {key_size:,} chars")
+
+            # Trim cached_simulation to summary only (full results are regenerated on demand)
             if "cached_simulation" in profile:
                 cached = profile["cached_simulation"]
                 profile["cached_simulation"] = {
@@ -304,13 +308,16 @@ async def stream_strategy_generation(
                     "aggregate": cached.get("aggregate"),
                 }
 
-            import sys
+            # Safety check: if still too large, trim sim_tags as last resort
             profile_size = len(json.dumps(profile))
-            print(f"[STRATEGY] Profile size before save: {profile_size:,} chars")
-            for key in profile:
-                key_size = len(json.dumps(profile[key])) if profile[key] else 0
-                if key_size > 1000:
-                    print(f"[STRATEGY]   {key}: {key_size:,} chars")
+            print(f"[STRATEGY] Profile size after trim: {profile_size:,} chars")
+            if profile_size > 500_000:
+                print(f"[STRATEGY] WARNING: Profile still too large ({profile_size:,}), removing sim_tags")
+                if "sim_tags" in profile:
+                    profile["sim_tags_count"] = len(profile["sim_tags"])
+                    del profile["sim_tags"]
+                profile_size = len(json.dumps(profile))
+                print(f"[STRATEGY] Profile size final: {profile_size:,} chars")
 
             try:
                 from database.session import SessionLocal

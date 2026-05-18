@@ -41,7 +41,7 @@
 
   /* Primary action button */
   .btn-primary {
-    @apply px-4 py-2 text-sm font-medium rounded
+    @apply px-4 py-2 text-sm font-medium rounded min-h-[44px] sm:min-h-0
            bg-accent-green/10 text-accent-green border border-accent-green/30
            hover:bg-accent-green/20 hover:border-accent-green/50
            active:bg-accent-green/30
@@ -51,7 +51,7 @@
 
   /* Ghost button */
   .btn-ghost {
-    @apply px-4 py-2 text-sm font-medium rounded
+    @apply px-4 py-2 text-sm font-medium rounded min-h-[44px] sm:min-h-0
            text-text-secondary
            hover:bg-bg-hover hover:text-text-primary
            transition-all duration-150;
@@ -82,3 +82,16 @@
     @apply text-accent-green animate-pulse;
   }
 }
+
+/* Modal overlay — full screen on mobile, centered on desktop */
+  .modal-overlay {
+    @apply fixed inset-0 z-50 bg-black/70 backdrop-blur-sm
+           flex items-end sm:items-center justify-center
+           p-0 sm:p-4;
+  }
+
+  .modal-content {
+    @apply w-full sm:max-w-2xl max-h-[90vh] overflow-y-auto
+           bg-bg-secondary border border-border
+           rounded-t-xl sm:rounded-xl;
+  }

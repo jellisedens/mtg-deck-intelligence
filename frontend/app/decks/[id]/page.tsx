@@ -224,32 +224,32 @@ function DeckBuilderContent({ deckId }: { deckId: string }) {
   return (
     <div>
       <VerificationBanner />
-      <div className="flex items-center justify-between mb-6">
-        <div>
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between mb-6 gap-3">
+        <div className="min-w-0">
           <div className="flex items-center gap-2">
             <button
               onClick={() => router.push("/decks")}
-              className="text-text-muted hover:text-text-primary transition-colors text-sm"
+              className="text-text-muted hover:text-text-primary transition-colors text-sm flex-shrink-0"
             >
               ~/decks
             </button>
             <span className="text-text-muted">/</span>
-            <h1 className="text-lg font-bold text-text-primary">
+            <h1 className="text-lg font-bold text-text-primary truncate">
               {deck.name}
             </h1>
           </div>
           <div className="flex items-center gap-3 mt-1">
-            <span className="px-1.5 py-0.5 text-xxs rounded bg-bg-tertiary text-text-secondary">
+            <span className="px-1.5 py-0.5 text-xxs rounded bg-bg-tertiary text-text-secondary flex-shrink-0">
               {deck.format}
             </span>
             {deck.description && (
-              <span className="text-xs text-text-muted">
+              <span className="text-xs text-text-muted truncate">
                 {deck.description}
               </span>
             )}
           </div>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <button
             onClick={() => setShowHandSim(true)}
             className="btn-primary text-xs"
@@ -260,13 +260,13 @@ function DeckBuilderContent({ deckId }: { deckId: string }) {
             onClick={() => setShowGameSim(true)}
             className="btn-ghost text-xs"
           >
-            simulate games
+            simulate
           </button>
           <button
             onClick={handleAutoTagRoles}
             className="btn-ghost text-xs"
           >
-            auto-tag roles
+            auto-tag
           </button>
         </div>
       </div>

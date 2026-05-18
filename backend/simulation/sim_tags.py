@@ -465,6 +465,8 @@ def _call_sim_tag_batch(system: str, user_msg: str, batch: list) -> dict:
         try:
             parsed = json.loads(content)
         except json.JSONDecodeError:
+            print(f"[SIM_TAGS] Raw content around error:\n{content[2050:2150]}")
+        
             # Try fixing trailing commas
             import re
             fixed = re.sub(r',\s*}', '}', content)

@@ -147,7 +147,33 @@ async function request<T>(
 
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    throw new Error(body.detail || `Request failed: ${res.status}`);
+    
+    // Handle verification required
+    if (res.status === 403 && typeof body.detail === "string" && body.detail.includes("verification")) {
+      throw new Error("Please verify your email to use this feature. Check your inbox or resend from the banner above.");
+    }
+    
+    // Handle rate limiting
+    if (res.status === 429) {
+      throw new Error("You're doing that too fast. Please wait a moment and try again.");
+    }
+
+    // Extract readable error message
+    let message = `Request failed: ${res.status}`;
+    if (typeof body.detail === "string") {
+      message = body.detail;
+    } else if (typeof body.detail === "object" && body.detail !== null) {
+      // Pydantic validation errors come as arrays
+      if (Array.isArray(body.detail)) {
+        message = body.detail.map((e: { msg?: string }) => e.msg || JSON.stringify(e)).join(", ");
+      } else {
+        message = JSON.stringify(body.detail);
+      }
+    } else if (typeof body.message === "string") {
+      message = body.message;
+    }
+    
+    throw new Error(message);
   }
 
   if (res.status === 204) {

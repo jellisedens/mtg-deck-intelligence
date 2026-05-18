@@ -460,8 +460,42 @@ def _call_sim_tag_batch(system: str, user_msg: str, batch: list) -> dict:
         )
         content = response.choices[0].message.content.strip()
         content = content.replace("```json", "").replace("```", "").strip()
-        parsed = json.loads(content)
-
+        
+        # Attempt JSON repair for common issues
+        try:
+            parsed = json.loads(content)
+        except json.JSONDecodeError:
+            # Try fixing trailing commas
+            import re
+            fixed = re.sub(r',\s*}', '}', content)
+            fixed = re.sub(r',\s*]', ']', fixed)
+            # Try fixing unescaped quotes in strings
+            try:
+                parsed = json.loads(fixed)
+            except json.JSONDecodeError:
+                # Last resort: try to extract just the cards array
+                match = re.search(r'"cards"\s*:\s*\[', fixed)
+                if match:
+                    # Find the matching closing bracket
+                    start = match.start()
+                    bracket_count = 0
+                    for i in range(match.end() - 1, len(fixed)):
+                        if fixed[i] == '[':
+                            bracket_count += 1
+                        elif fixed[i] == ']':
+                            bracket_count -= 1
+                            if bracket_count == 0:
+                                cards_json = '{"cards":' + fixed[match.end()-1:i+1] + '}'
+                                try:
+                                    parsed = json.loads(cards_json)
+                                except json.JSONDecodeError:
+                                    raise
+                                break
+                    else:
+                        raise
+                else:
+                    raise
+        
         tags = {}
         for card_data in parsed.get("cards", []):
             name = card_data.get("name", "").lower()
@@ -471,7 +505,6 @@ def _call_sim_tag_batch(system: str, user_msg: str, batch: list) -> dict:
                 card_tags = _validate_and_fix(card_tags, original)
             tags[name] = card_tags
         return tags
-
     except Exception as e:
         print(f"Sim tag batch failed: {e}")
         result = {}

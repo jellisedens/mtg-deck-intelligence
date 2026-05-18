@@ -7,6 +7,7 @@ import CreateDeckModal from "@/components/CreateDeckModal";
 import ImportDeckModal from "@/components/ImportDeckModal";
 import { getDecks, deleteDeck } from "@/lib/api";
 import { Deck } from "@/lib/types";
+import VerificationBanner from "@/components/VerificationBanner";
 
 function DecksContent() {
   const [decks, setDecks] = useState<Deck[]>([]);
@@ -66,6 +67,7 @@ function DecksContent() {
 
   return (
     <div>
+      <VerificationBanner />
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-lg font-bold text-text-primary">

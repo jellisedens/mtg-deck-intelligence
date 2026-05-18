@@ -51,6 +51,7 @@ def signup(request: SignupRequest, db: Session = Depends(get_db)):
     return TokenResponse(
         access_token=create_access_token(user_id=str(user.id), email=user.email),
         refresh_token=create_refresh_token(user_id=str(user.id)),
+        is_verified=user.is_verified,
     )
 
 
@@ -67,6 +68,7 @@ def login(request: LoginRequest, db: Session = Depends(get_db)):
     return TokenResponse(
         access_token=create_access_token(user_id=str(user.id), email=user.email),
         refresh_token=create_refresh_token(user_id=str(user.id)),
+        is_verified=user.is_verified,
     )
 
 
@@ -89,6 +91,7 @@ def refresh(request: RefreshRequest, db: Session = Depends(get_db)):
     return TokenResponse(
         access_token=create_access_token(user_id=str(user.id), email=user.email),
         refresh_token=create_refresh_token(user_id=str(user.id)),
+        is_verified=user.is_verified,
     )
 
 

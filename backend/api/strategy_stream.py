@@ -66,6 +66,8 @@ async def stream_strategy_generation(
     user = db.query(UserModel).filter(UserModel.id == payload["sub"]).first()
     if not user:
         raise HTTPException(status_code=401, detail="User not found")
+    if not user.is_verified:
+        raise HTTPException(status_code=403, detail="Email verification required. Check your inbox or request a new verification email.")
 
     deck = db.query(Deck).filter(Deck.id == deck_id).first()
     if not deck:

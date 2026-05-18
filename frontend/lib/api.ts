@@ -56,7 +56,15 @@ export function clearToken() {
   if (typeof window !== "undefined") {
     localStorage.removeItem("mtg_token");
     localStorage.removeItem("mtg_refresh_token");
+    localStorage.removeItem("mtg_verified");
   }
+}
+
+export function isVerified(): boolean {
+  if (typeof window !== "undefined") {
+    return localStorage.getItem("mtg_verified") === "true";
+  }
+  return false;
 }
 
 // ── Token refresh ────────────────────────────────────
@@ -82,6 +90,9 @@ async function tryRefresh(): Promise<boolean> {
       const data = await res.json();
       setToken(data.access_token);
       setRefreshToken(data.refresh_token);
+      if (typeof window !== "undefined" && data.is_verified !== undefined) {
+        localStorage.setItem("mtg_verified", String(data.is_verified));
+      }
       return true;
     } catch {
       return false;
@@ -153,8 +164,12 @@ export async function login(data: LoginRequest): Promise<AuthResponse> {
   });
   setToken(res.access_token);
   setRefreshToken(res.refresh_token);
+  if (typeof window !== "undefined") {
+    localStorage.setItem("mtg_verified", String(res.is_verified));
+  }
   return res;
 }
+
 
 export async function signup(data: SignupRequest): Promise<AuthResponse> {
   const res = await request<AuthResponse>("/auth/signup", {
@@ -163,6 +178,9 @@ export async function signup(data: SignupRequest): Promise<AuthResponse> {
   });
   setToken(res.access_token);
   setRefreshToken(res.refresh_token);
+  if (typeof window !== "undefined") {
+    localStorage.setItem("mtg_verified", "false");
+  }
   return res;
 }
 

@@ -5,7 +5,7 @@ from database.session import get_db
 from models.user import User
 from models.deck import Deck
 from models.deck_card import DeckCard
-from api.deps import get_current_user
+from api.deps import get_verified_user
 from api.schemas.suggest import SuggestRequest, SuggestResponse
 from services.ai_suggest import get_suggestions
 from services.scryfall import scryfall_service
@@ -16,7 +16,7 @@ router = APIRouter(prefix="/ai", tags=["ai suggestions"])
 @router.post("/suggest", response_model=SuggestResponse)
 async def suggest_cards(
     request: SuggestRequest,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_verified_user),
     db: Session = Depends(get_db),
 ):
     """

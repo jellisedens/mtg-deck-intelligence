@@ -16,6 +16,7 @@ import { useCardCache } from "@/lib/card-cache";
 import { Deck, ScryfallCard } from "@/lib/types";
 import { usePathname } from "next/navigation";
 import DeckVersions from "@/components/DeckVersions";
+import VerificationBanner from "@/components/VerificationBanner";
 
 function DeckBuilderContent({ deckId }: { deckId: string }) {
   const router = useRouter();
@@ -225,6 +226,7 @@ function DeckBuilderContent({ deckId }: { deckId: string }) {
 
   return (
     <div>
+      <VerificationBanner />
       <div className="flex items-center justify-between mb-6">
         <div>
           <div className="flex items-center gap-2">

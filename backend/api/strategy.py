@@ -9,7 +9,7 @@ from database.session import get_db
 from models.user import User
 from models.deck import Deck
 from models.deck_card import DeckCard
-from api.deps import get_current_user
+from api.deps import get_verified_user
 from services.analytics import compute_analytics
 from services.role_classifier import classify_deck_roles
 from services.strategy_profiler import (
@@ -31,7 +31,7 @@ _executor = ThreadPoolExecutor(max_workers=12)
 @router.post("/{deck_id}/strategy", response_model=dict)
 async def generate_deck_strategy(
     deck_id: UUID,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_verified_user),
     db: Session = Depends(get_db),
 ):
     """
@@ -223,7 +223,7 @@ async def generate_deck_strategy(
 @router.get("/{deck_id}/strategy", response_model=dict)
 async def get_deck_strategy(
     deck_id: UUID,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_verified_user),
     db: Session = Depends(get_db),
 ):
     """Get the stored strategic profile for a deck."""

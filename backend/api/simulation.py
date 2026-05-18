@@ -8,7 +8,7 @@ from database.session import get_db
 from models.user import User
 from models.deck import Deck
 from models.deck_card import DeckCard
-from api.deps import get_current_user
+from api.deps import get_verified_user
 from services.scryfall import scryfall_service
 from simulation.sim_tags import generate_sim_tags
 from simulation.hand_simulator import simulate_opening_hands, simulate_mulligan_sequence
@@ -76,7 +76,7 @@ async def _build_deck_for_simulation(deck_id: UUID, user: User, db: Session) -> 
 @router.post("/{deck_id}/simulate/hand")
 async def simulate_hand(
     deck_id: UUID,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_verified_user),
     db: Session = Depends(get_db),
     n_simulations: int = 1000,
     mulligan_to: int = 7,
@@ -106,7 +106,7 @@ async def simulate_hand(
 @router.post("/{deck_id}/simulate/mulligan")
 async def simulate_mulligans(
     deck_id: UUID,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_verified_user),
     db: Session = Depends(get_db),
 ):
     """
@@ -129,7 +129,7 @@ async def simulate_mulligans(
 @router.post("/{deck_id}/simulate/game")
 async def simulate_games(
     deck_id: UUID,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_verified_user),
     db: Session = Depends(get_db),
     n_games: int = 100,
     turns: int = 10,
@@ -162,7 +162,7 @@ async def simulate_games(
 @router.post("/{deck_id}/simulate/analyze")
 async def simulate_and_analyze(
     deck_id: UUID,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_verified_user),
     db: Session = Depends(get_db),
     n_games: int = 100,
     turns: int = 10,
@@ -208,7 +208,7 @@ async def simulate_and_analyze(
 async def interpret_simulation(
     deck_id: UUID,
     simulation_data: dict,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_verified_user),
     db: Session = Depends(get_db),
 ):
     """
@@ -241,7 +241,7 @@ async def interpret_simulation(
 @router.post("/{deck_id}/simulate/regenerate-tags")
 async def regenerate_sim_tags_endpoint(
     deck_id: UUID,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_verified_user),
     db: Session = Depends(get_db),
 ):
     """
@@ -273,7 +273,7 @@ async def regenerate_sim_tags_endpoint(
 async def simulate_with_custom_tracking(
     deck_id: UUID,
     tracking: CustomTrackingRequest,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_verified_user),
     db: Session = Depends(get_db),
     n_games: int = 500,
     turns: int = 10,

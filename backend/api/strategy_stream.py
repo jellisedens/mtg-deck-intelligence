@@ -303,6 +303,7 @@ async def stream_strategy_generation(
                 }
 
             try:
+                print(f"[STRATEGY] Attempting save, profile size: {len(json.dumps(profile)):,} chars")
                 from database.session import SessionLocal
                 from sqlalchemy import func
                 save_db = SessionLocal()
@@ -335,6 +336,7 @@ async def stream_strategy_generation(
 
                 save_deck.strategy_profile = profile
                 save_db.commit()
+                print(f"[STRATEGY] Save successful")
                 # Seed intelligence from the new profile
                 seed_from_strategy_profile(save_deck, save_db)
                 save_db.close()

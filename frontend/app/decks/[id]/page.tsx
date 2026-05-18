@@ -17,6 +17,7 @@ import { Deck, ScryfallCard } from "@/lib/types";
 import { usePathname } from "next/navigation";
 import DeckVersions from "@/components/DeckVersions";
 import VerificationBanner from "@/components/VerificationBanner";
+import ExportDeckModal from "@/components/ExportDeckModal";
 
 function DeckBuilderContent({ deckId }: { deckId: string }) {
   const router = useRouter();
@@ -30,6 +31,7 @@ function DeckBuilderContent({ deckId }: { deckId: string }) {
   const [showGameSim, setShowGameSim] = useState(false);
   const [hasStrategy, setHasStrategy] = useState(false);
   const [strategy, setStrategy] = useState<Record<string, unknown> | null>(null);
+  const [showExport, setShowExport] = useState(false);
 
   const { cardDataMap, fetchCards, addCard: cacheCard, isLoading: cardsLoading } = useCardCache();
 
@@ -268,6 +270,12 @@ function DeckBuilderContent({ deckId }: { deckId: string }) {
           >
             auto-tag
           </button>
+          <button
+            onClick={() => setShowExport(true)}
+            className="btn-ghost text-xs"
+          >
+            export
+          </button>
         </div>
       </div>
 
@@ -344,6 +352,15 @@ function DeckBuilderContent({ deckId }: { deckId: string }) {
         <GameSimulator
           deckId={deckId}
           onClose={() => setShowGameSim(false)}
+        />
+      )}
+
+      {showExport && (
+        <ExportDeckModal
+          deckName={deck.name}
+          cards={deck.cards || []}
+          cardDataMap={cardDataMap}
+          onClose={() => setShowExport(false)}
         />
       )}
     </div>

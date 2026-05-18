@@ -176,7 +176,13 @@ export default function GameSimulator({ deckId, onClose }: Props) {
 
         if (!res.ok) {
           const body = await res.json().catch(() => ({}));
-          throw new Error(body.detail || `Simulation failed: ${res.status}`);
+          if (res.status === 403 && typeof body.detail === "string" && body.detail.includes("verification")) {
+            throw new Error("Please verify your email to run simulations.");
+          }
+          if (res.status === 429) {
+            throw new Error("You're doing that too fast. Please wait a moment.");
+          }
+          throw new Error(typeof body.detail === "string" ? body.detail : `Simulation failed: ${res.status}`);
         }
 
         data = await res.json();

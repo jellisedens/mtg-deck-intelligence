@@ -27,6 +27,7 @@ export default function DeckPreferences({ deckId, currentPreferences, onSaved }:
   const [otherNotes, setOtherNotes] = useState("");
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [saveError, setSaveError] = useState("");
 
   useEffect(() => {
     if (currentPreferences) {
@@ -61,8 +62,8 @@ export default function DeckPreferences({ deckId, currentPreferences, onSaved }:
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
       onSaved();
-    } catch {
-      // silently fail
+    } catch (err: unknown) {
+      setSaveError(err instanceof Error ? err.message : "Failed to save preferences");
     } finally {
       setSaving(false);
     }
@@ -183,6 +184,9 @@ export default function DeckPreferences({ deckId, currentPreferences, onSaved }:
             </button>
             {saved && (
               <span className="text-accent-green text-xs">saved</span>
+            )}
+            {saveError && (
+              <span className="text-accent-red text-xs">{saveError}</span>
             )}
           </div>
         </div>

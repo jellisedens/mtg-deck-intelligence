@@ -97,6 +97,7 @@ export default function StrategyGenerator({ deckId, hasProfile, onComplete, card
             <div className="mb-3">
               <button
                 onClick={handleGenerate}
+                disabled={!cardCount || cardCount === 0}
                 className={hasProfile ? "btn-ghost text-xs w-full" : "btn-primary text-xs w-full"}
               >
                 {!hasProfile
@@ -106,7 +107,11 @@ export default function StrategyGenerator({ deckId, hasProfile, onComplete, card
                   : "regenerate profile"
                 }
               </button>
-              {!hasProfile && (
+             {!cardCount || cardCount === 0 ? (
+                <p className="text-xxs text-text-muted mt-1">
+                  add cards to your deck before generating a strategy profile
+                </p>
+              ) : !hasProfile && (
                 <p className="text-xxs text-text-muted mt-1">
                   AI analyzes every card, ranks impact, maps synergies, runs simulation
                 </p>

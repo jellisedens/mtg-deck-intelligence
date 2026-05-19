@@ -201,7 +201,13 @@ function ManaTab({ turnData }: { turnData: TurnData[] }) {
 
 
 function ColorsTab({ turnData }: { turnData: TurnData[] }) {
-  const colors = ["W", "U", "B", "R", "G"];
+  // Only show colors that the deck actually has access to
+  const allColors = ["W", "U", "B", "R", "G"];
+  const lastTurn = turnData[turnData.length - 1];
+  const colors = allColors.filter((c) => {
+    const rate = lastTurn?.color_access_rates?.[c];
+    return rate !== undefined && rate > 0;
+  });
   const keyTurns = [1, 3, 5, 7, 10];
   const filtered = turnData.filter((t) => keyTurns.includes(t.turn));
 
@@ -211,13 +217,13 @@ function ColorsTab({ turnData }: { turnData: TurnData[] }) {
         <table className="w-full text-xs">
           <thead>
             <tr className="text-text-muted border-b border-border">
-              <th className="text-right py-1.5 pl-2 font-medium" title="% of games where all 5 colors are available">all 5</th>
+              <th className="text-left py-1.5 pr-2 font-medium">turn</th>
               {colors.map((c) => (
                 <th key={c} className="text-right py-1.5 px-1 font-medium">
                   <span className="inline-block w-3 h-3 rounded-full" style={{ background: COLOR_LABELS[c].fill }} />
                 </th>
               ))}
-              <th className="text-right py-1.5 pl-2 font-medium">all 5</th>
+              <th className="text-right py-1.5 pl-2 font-medium" title={`% of games where all ${colors.length} colors are available`}>all {colors.length}</th>
             </tr>
           </thead>
           <tbody>

@@ -204,10 +204,9 @@ function ColorsTab({ turnData }: { turnData: TurnData[] }) {
   // Only show colors that the deck actually has access to
   const allColors = ["W", "U", "B", "R", "G"];
   const lastTurn = turnData[turnData.length - 1];
-  const colors = allColors.filter((c) => {
-    // Check if any turn has meaningful access (>10%) for this color
-    return turnData.some((t) => (t.color_access_rates?.[c] ?? 0) > 10);
-  });
+  // Filter by colors with meaningful mana sources (>1.0 avg sources by T5)
+  const t5Sources = turnData[4]?.avg_color_sources ?? {};
+  const colors = allColors.filter((c) => (t5Sources[c] ?? 0) >= 1.0);
   const keyTurns = [1, 3, 5, 7, 10];
   const filtered = turnData.filter((t) => keyTurns.includes(t.turn));
 

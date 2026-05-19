@@ -205,8 +205,8 @@ function ColorsTab({ turnData }: { turnData: TurnData[] }) {
   const allColors = ["W", "U", "B", "R", "G"];
   const lastTurn = turnData[turnData.length - 1];
   const colors = allColors.filter((c) => {
-    const rate = lastTurn?.color_access_rates?.[c];
-    return rate !== undefined && rate > 0;
+    // Check if any turn has meaningful access (>10%) for this color
+    return turnData.some((t) => (t.color_access_rates?.[c] ?? 0) > 10);
   });
   const keyTurns = [1, 3, 5, 7, 10];
   const filtered = turnData.filter((t) => keyTurns.includes(t.turn));

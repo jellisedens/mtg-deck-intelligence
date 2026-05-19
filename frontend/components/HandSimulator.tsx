@@ -140,6 +140,7 @@ export default function HandSimulator({ deckId, cards, onClose }: Props) {
   function confirmBottom() {
     const kept = hand.filter((_, i) => !bottomIndices.has(i));
     setHand(kept);
+    setBottomIndices(new Set());
     setPhase("kept");
   }
 
@@ -199,7 +200,7 @@ export default function HandSimulator({ deckId, cards, onClose }: Props) {
           </div>
         )}
 
-        <div className="flex gap-2 overflow-x-auto pb-4 justify-center">
+        <div className="flex gap-2 overflow-x-auto pb-4 px-4" style={{ justifyContent: hand.length <= 5 ? "center" : "flex-start" }}>
           {hand.map((card, i) => (
             <CardInHand
               key={`${card.scryfall_id}-${i}`}
@@ -233,13 +234,14 @@ export default function HandSimulator({ deckId, cards, onClose }: Props) {
         <div className="flex gap-3 justify-center mb-4">
           {phase === "drawn" && (
             <>
-              <button
-                onClick={mulligan}
-                disabled={mulliganCount >= 6}
-                className="btn-danger"
-              >
-                mulligan (draw 7 again)
-              </button>
+              {mulliganCount < 6 && (
+                <button
+                  onClick={mulligan}
+                  className="btn-danger"
+                >
+                  mulligan (draw 7 again)
+                </button>
+              )}
               <button onClick={startBottoming} className="btn-primary">
                 {mulliganCount > 0 ? `keep — select ${mulliganCount} to bottom` : "keep — draw new hand"}
               </button>

@@ -63,11 +63,7 @@ function DeckBuilderContent({ deckId }: { deckId: string }) {
     if (!deck) return;
     setActionError("");
 
-    const isCommander =
-      deck.format === "commander" &&
-      card.type_line?.toLowerCase().includes("legendary") &&
-      card.type_line?.toLowerCase().includes("creature") &&
-      (!deck.cards || !deck.cards.some((c) => c.board === "commander"));
+    const isCommander = false;
 
     try {
       await addCard(deckId, {

@@ -83,9 +83,10 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
         bucket = self.buckets[user_key][pattern_key]
         if not bucket.consume():
-            raise HTTPException(
+            from starlette.responses import JSONResponse
+            return JSONResponse(
                 status_code=429,
-                detail="Rate limit exceeded. Please wait before trying again.",
+                content={"detail": "Rate limit exceeded. Please wait before trying again."},
             )
 
         # Periodic cleanup of stale buckets

@@ -25,6 +25,9 @@ function VerifyContent() {
         if (res.ok) {
           setStatus("success");
           setMessage(data.message || "Email verified successfully!");
+          if (typeof window !== "undefined") {
+            localStorage.setItem("mtg_verified", "true");
+          }
         } else {
           setStatus("error");
           setMessage(data.detail || "Verification failed.");

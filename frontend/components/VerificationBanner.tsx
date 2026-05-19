@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { isVerified, getToken } from "@/lib/api";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8001";
@@ -9,7 +9,13 @@ export default function VerificationBanner() {
   const [dismissed, setDismissed] = useState(false);
   const [resending, setResending] = useState(false);
   const [sent, setSent] = useState(false);
-  const verified = isVerified();
+  const [verified, setVerified] = useState(isVerified());
+
+  useEffect(() => {
+    const handleFocus = () => setVerified(isVerified());
+    window.addEventListener("focus", handleFocus);
+    return () => window.removeEventListener("focus", handleFocus);
+  }, []);
 
   if (verified || dismissed) return null;
 

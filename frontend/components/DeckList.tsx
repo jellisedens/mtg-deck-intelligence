@@ -107,7 +107,6 @@ export default function DeckList({
     { key: "name", label: "name" },
     { key: "cmc", label: "cmc" },
     { key: "price", label: "price" },
-    { key: "impact", label: "impact" },
   ];
 
   function renderCards(boardCards: DeckCard[]) {
@@ -149,6 +148,7 @@ export default function DeckList({
                   onUpdateNotes={onUpdateNotes}
                   onRolesUpdated={onRolesUpdated}
                   format={format}
+                  sortMode={sortMode}
                 />
               ))}
           </div>
@@ -169,6 +169,7 @@ export default function DeckList({
         onUpdateNotes={onUpdateNotes}
         onRolesUpdated={onRolesUpdated}
         format={format}
+        sortMode={sortMode}
       />
     ));
   }

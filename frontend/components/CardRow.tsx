@@ -14,6 +14,7 @@ interface Props {
   onUpdateNotes: (cardId: string, notes: string) => void;
   onRolesUpdated?: () => void;
   format: string;
+  sortMode?: string;
 }
 
 export default function CardRow({
@@ -25,6 +26,7 @@ export default function CardRow({
   onUpdateNotes,
   onRolesUpdated,
   format,
+  sortMode,
 }: Props) {
   const [expanded, setExpanded] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -80,9 +82,16 @@ export default function CardRow({
           className="flex-1 text-left text-sm text-text-primary hover:text-accent-green transition-colors truncate"
         >
           {card.card_name}
-        </button>
+          </button>
 
-        {/* Role name */}
+          {/* Price when sorting by price */}
+          {sortMode === "price" && cardData?.prices?.usd && (
+            <span className="text-xxs text-accent-green flex-shrink-0">
+              ${cardData.prices.usd}
+            </span>
+          )}
+  
+          {/* Role name */}
         {aiContext?.role && (
           <span className="text-xxs text-text-muted flex-shrink-0">
             {aiContext.role}

@@ -29,7 +29,7 @@ function getCardType(card: DeckCard, cardData?: ScryfallCard): string {
   return "Other";
 }
 
-type SortMode = "type" | "name" | "cmc" | "price" | "impact";
+type SortMode = "type" | "name" | "cmc" | "price";
 
 function sortCards(cards: DeckCard[], cardDataMap: Record<string, ScryfallCard>, mode: SortMode): DeckCard[] {
   const sorted = [...cards];
@@ -47,12 +47,6 @@ function sortCards(cards: DeckCard[], cardDataMap: Record<string, ScryfallCard>,
         const priceA = parseFloat(cardDataMap[a.scryfall_id]?.prices?.usd || "0");
         const priceB = parseFloat(cardDataMap[b.scryfall_id]?.prices?.usd || "0");
         return priceB - priceA || a.card_name.localeCompare(b.card_name);
-      });
-    case "impact":
-      return sorted.sort((a, b) => {
-        const scoreA = a.ai_context?.impact_score ?? 0;
-        const scoreB = b.ai_context?.impact_score ?? 0;
-        return scoreB - scoreA || a.card_name.localeCompare(b.card_name);
       });
     default:
       return sorted.sort((a, b) => a.card_name.localeCompare(b.card_name));
@@ -96,12 +90,6 @@ export default function DeckList({
     );
   }
 
-  const boards = [
-    { key: "commander", label: "commander" },
-    { key: "main", label: "main" },
-    { key: "sideboard", label: "sideboard" },
-  ];
-
   const sortOptions: { key: SortMode; label: string }[] = [
     { key: "type", label: "type" },
     { key: "name", label: "name" },
@@ -111,7 +99,6 @@ export default function DeckList({
 
   function renderCards(boardCards: DeckCard[]) {
     if (sortMode === "type") {
-      // Group by type
       const typeGroups: Record<string, DeckCard[]> = {};
       boardCards.forEach((card) => {
         const cardData = cardDataMap[card.scryfall_id];
@@ -145,6 +132,7 @@ export default function DeckList({
                   deckId={deckId}
                   onUpdateQuantity={onUpdateQuantity}
                   onRemoveCard={onRemoveCard}
+                  onChangeBoard={onChangeBoard}
                   onUpdateNotes={onUpdateNotes}
                   onRolesUpdated={onRolesUpdated}
                   format={format}
@@ -156,7 +144,6 @@ export default function DeckList({
       });
     }
 
-    // Flat sorted list for non-type sorts
     const sorted = sortCards(boardCards, cardDataMap, sortMode);
     return sorted.map((card) => (
       <CardRow
@@ -166,6 +153,7 @@ export default function DeckList({
         deckId={deckId}
         onUpdateQuantity={onUpdateQuantity}
         onRemoveCard={onRemoveCard}
+        onChangeBoard={onChangeBoard}
         onUpdateNotes={onUpdateNotes}
         onRolesUpdated={onRolesUpdated}
         format={format}
@@ -203,7 +191,51 @@ export default function DeckList({
       </div>
 
       <div className="p-2">
-        {boards.map((board) => {
+        {/* Commander slot for commander format */}
+        {format === "commander" && (
+          <div className="mb-4">
+            <div className="flex items-center gap-2 px-2 py-1.5 mb-1">
+              <span className="text-xs text-accent-purple font-medium uppercase tracking-wider">
+                commander
+              </span>
+              <div className="flex-1 h-px bg-border" />
+            </div>
+            {(() => {
+              const commanderCard = cards.find((c) => c.board === "commander");
+              if (commanderCard) {
+                return (
+                  <CardRow
+                    key={commanderCard.id}
+                    card={commanderCard}
+                    cardData={cardDataMap[commanderCard.scryfall_id]}
+                    deckId={deckId}
+                    onUpdateQuantity={onUpdateQuantity}
+                    onRemoveCard={onRemoveCard}
+                    onChangeBoard={onChangeBoard}
+                    onUpdateNotes={onUpdateNotes}
+                    onRolesUpdated={onRolesUpdated}
+                    format={format}
+                    sortMode={sortMode}
+                  />
+                );
+              }
+              return (
+                <div className="px-2 py-3 text-center border border-dashed border-border/50 rounded mx-2">
+                  <p className="text-xs text-text-muted">no commander set</p>
+                  <p className="text-xxs text-text-muted mt-1">
+                    add a legendary creature and click ★ to set as commander
+                  </p>
+                </div>
+              );
+            })()}
+          </div>
+        )}
+
+        {/* Main and sideboard sections — skip commander since it's rendered above */}
+        {[
+          { key: "main", label: "main" },
+          { key: "sideboard", label: "sideboard" },
+        ].map((board) => {
           const boardCards = cards.filter((c) => c.board === board.key);
           if (boardCards.length === 0) return null;
 

@@ -11,6 +11,7 @@ interface Props {
   deckId: string;
   onUpdateQuantity: (cardId: string, quantity: number) => Promise<string | null>;
   onRemoveCard: (cardId: string) => void;
+  onChangeBoard?: (cardId: string, board: string) => void;
   onUpdateNotes: (cardId: string, notes: string) => void;
   onRolesUpdated?: () => void;
   format: string;
@@ -23,6 +24,7 @@ export default function CardRow({
   deckId,
   onUpdateQuantity,
   onRemoveCard,
+  onChangeBoard,
   onUpdateNotes,
   onRolesUpdated,
   format,
@@ -82,16 +84,16 @@ export default function CardRow({
           className="flex-1 text-left text-sm text-text-primary hover:text-accent-green transition-colors truncate"
         >
           {card.card_name}
-          </button>
+        </button>
 
-          {/* Price when sorting by price */}
-          {sortMode === "price" && cardData?.prices?.usd && (
-            <span className="text-xxs text-accent-green flex-shrink-0">
-              ${cardData.prices.usd}
-            </span>
-          )}
-  
-          {/* Role name */}
+        {/* Price when sorting by price */}
+        {sortMode === "price" && cardData?.prices?.usd && (
+          <span className="text-xxs text-accent-green flex-shrink-0">
+            ${cardData.prices.usd}
+          </span>
+        )}
+
+        {/* Role name */}
         {aiContext?.role && (
           <span className="text-xxs text-text-muted flex-shrink-0">
             {aiContext.role}
@@ -107,6 +109,21 @@ export default function CardRow({
 
         {/* Mana cost */}
         {cardData && <ManaCost cost={cardData.mana_cost} />}
+
+        {/* Set as commander */}
+        {onChangeBoard && format === "commander" && card.board !== "commander" &&
+         cardData?.type_line?.toLowerCase().includes("legendary") && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onChangeBoard(card.id, "commander");
+            }}
+            className="text-xxs text-accent-purple hover:text-accent-purple/80 flex-shrink-0 opacity-0 group-hover:opacity-100 transition-all"
+            title="Set as commander"
+          >
+            ★
+          </button>
+        )}
 
         {/* Remove */}
         <button

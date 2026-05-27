@@ -12,6 +12,7 @@ import logging
 from openai import OpenAI
 from services.mtg_knowledge import build_knowledge_context, SCRYFALL_SYNTAX_GUIDE
 from services.scryfall import scryfall_service
+from services.vector_search import search_with_context
 from services.analytics import compute_analytics
 from services.role_classifier import classify_deck_roles
 from services.deck_context import build_deck_context
@@ -350,6 +351,54 @@ async def get_suggestions(prompt: str, deck_cards: list = None, deck_info: dict 
 
     return result
 
+def _merge_vector_results(search_results: list, prompt: str, deck_info: dict, existing_cards: set) -> list:
+    """Run vector search and merge results into existing Scryfall results."""
+    t_vector = time.time()
+    try:
+        deck_colors = None
+        deck_format = "commander"
+        if deck_info:
+            profile = deck_info.get("strategy_profile") or {}
+            deck_colors = profile.get("color_identity")
+            deck_format = deck_info.get("format", "commander")
+
+        vector_results = search_with_context(
+            query=prompt,
+            deck_color_identity=deck_colors,
+            deck_card_names=list(existing_cards),
+            deck_format=deck_format,
+            limit=15,
+        )
+
+        seen_names = {r["name"].lower() for r in search_results}
+        vector_added = 0
+        for vcard in vector_results.get("results", []):
+            if vcard["name"].lower() not in seen_names:
+                search_results.append({
+                    "name": vcard["name"],
+                    "mana_cost": vcard.get("mana_cost", ""),
+                    "cmc": vcard.get("cmc", 0),
+                    "type_line": vcard.get("type_line", ""),
+                    "oracle_text": vcard.get("oracle_text", ""),
+                    "colors": vcard.get("colors", []),
+                    "color_identity": vcard.get("color_identity", []),
+                    "rarity": vcard.get("rarity", ""),
+                    "prices": vcard.get("prices", {}),
+                    "image_uris": vcard.get("image_uris", {}),
+                    "scryfall_id": vcard.get("scryfall_id", ""),
+                    "edhrec_rank": vcard.get("edhrec_rank"),
+                    "power": vcard.get("power"),
+                    "toughness": vcard.get("toughness"),
+                })
+                seen_names.add(vcard["name"].lower())
+                vector_added += 1
+
+        search_results.sort(key=lambda c: c.get("edhrec_rank") or 999999)
+        print(f"[AI] Vector search added {vector_added} new cards ({time.time() - t_vector:.1f}s)")
+    except Exception as e:
+        print(f"[AI] Vector search failed (non-fatal): {e}")
+    
+    return search_results
 
 async def _handle_suggest(prompt: str, deck_cards: list, deck_info: dict,
                           simulation_data: dict, card_lookup: dict,
@@ -388,7 +437,10 @@ async def _handle_suggest(prompt: str, deck_cards: list, deck_info: dict,
         queries=plan.get("scryfall_queries", []),
         exclude_cards=existing_cards,
     )
-    print(f"[AI] Search results: {len(search_results)} ({time.time() - t_search:.1f}s)")
+    print(f"[AI] Scryfall results: {len(search_results)} ({time.time() - t_search:.1f}s)")
+
+    # Vector search — find conceptually similar cards
+    search_results = _merge_vector_results(search_results, prompt, deck_info, existing_cards)
 
     if len(search_results) < 5:
         t_broaden = time.time()
@@ -516,6 +568,9 @@ async def _handle_swap(prompt: str, deck_cards: list, deck_info: dict,
         exclude_cards=existing_cards,
     )
     print(f"[AI] Swap search: {len(search_results)} ({time.time() - t_search:.1f}s)")
+
+    # Vector search — find conceptually similar cards
+    search_results = _merge_vector_results(search_results, prompt, deck_info, existing_cards)
 
     if len(search_results) < 5:
         search_results = await _broaden_search(prompt, plan, deck_context, search_results, existing_cards)

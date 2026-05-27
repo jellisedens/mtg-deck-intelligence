@@ -25,3 +25,5 @@ openai==1.58.1
 pydantic[email]==2.10.4
 pydantic-settings==2.7.1
 sendgrid
+
+pgvector

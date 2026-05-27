@@ -213,3 +213,11 @@ pgdata/
 # Node (frontend — Phase 9)
 node_modules/
 .next/
+
+# Vector test cache
+vector-test/vector_cache/
+
+# Test scripts
+test_tags.py
+test_vector_flow.py
+test_batch.py

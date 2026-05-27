@@ -14,6 +14,7 @@ from models.deck import Deck
 from models.deck_card import DeckCard
 from models.simulation_result import SimulationResult
 from models.deck_version import DeckVersion
+from models.card import Card
 
 config = context.config
 

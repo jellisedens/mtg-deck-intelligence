@@ -31,6 +31,11 @@ export default function StrategyGenerator({ deckId, hasProfile, onComplete, card
   }, [parentStrategy]);
 
   function handleGenerate() {
+    // Check verification before starting expensive operation
+    if (typeof window !== "undefined" && localStorage.getItem("mtg_verified") !== "true") {
+      setError("Please verify your email to generate a strategy profile. Check your inbox or use the banner above to resend.");
+      return;
+    }
     setGenerating(true);
     setError("");
     setProgress({ step: "starting", progress: 0, message: "Initializing..." });

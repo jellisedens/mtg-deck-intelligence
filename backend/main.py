@@ -12,6 +12,7 @@ from api.simulation import router as simulation_router
 from api.strategy_stream import router as strategy_stream_router
 from api.deck_import import router as deck_import_router
 from api.versions import router as versions_router
+from api.admin import router as admin_router
 
 app = FastAPI(
     title="MTG Deck Intelligence",
@@ -45,6 +46,7 @@ app.include_router(simulation_router)
 app.include_router(strategy_stream_router)
 app.include_router(deck_import_router)
 app.include_router(versions_router)
+app.include_router(admin_router)
 
 @app.get("/")
 def root():

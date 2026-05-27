@@ -221,3 +221,9 @@ vector-test/vector_cache/
 test_tags.py
 test_vector_flow.py
 test_batch.py
+
+cards_dump.sql
+cards_dump.sql.gz
+tags_export.csv
+convert_tags.py
+export_chunks.sh

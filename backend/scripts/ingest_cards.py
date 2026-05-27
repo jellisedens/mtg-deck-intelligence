@@ -381,6 +381,14 @@ def generate_ai_tags(cards, resume_from=None):
         with open(TAGS_CACHE) as f:
             for tag in json.load(f):
                 existing_tags[tag["name"].lower()] = tag
+    elif not existing_tags:
+        # Check for seed tags (pre-generated, bundled with the app)
+        seed_path = Path(os.path.dirname(os.path.abspath(__file__))) / "seed_tags.json"
+        if seed_path.exists():
+            with open(seed_path) as f:
+                for tag in json.load(f):
+                    existing_tags[tag["name"].lower()] = tag
+            print(f"[TAGS] Loaded {len(existing_tags)} seed tags")
 
     # Load failed batches for retry
     failed_cards = set()

@@ -113,6 +113,10 @@ Rules:
                     user_msg += f"  User added: {', '.join(accepted)}\n"
         user_msg += "  Use this context to avoid repeating suggestions and to understand user preferences.\n"
 
+    # EDHREC community data
+    if deck_info and deck_info.get("_edhrec_context"):
+        user_msg += f"\n{deck_info['_edhrec_context']}\n"
+        
     return system, user_msg
 
 

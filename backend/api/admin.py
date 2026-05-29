@@ -128,3 +128,33 @@ async def backfill_edhrec(
     db.close()
 
     return {"status": "complete", "updated": updated}
+
+@router.get("/edhrec-test/{commander_name}")
+async def test_edhrec(
+    commander_name: str,
+    user: User = Depends(get_current_user),
+):
+    """Test EDHREC data for a commander."""
+    from services.edhrec import fetch_commander_profile
+    
+    profile = await fetch_commander_profile(commander_name)
+    if not profile:
+        return {"error": f"No EDHREC data for {commander_name}"}
+    
+    return {
+        "commander": profile["commander_name"],
+        "total_decks": profile["total_decks"],
+        "rank": profile.get("rank"),
+        "themes": profile.get("themes", [])[:5],
+        "combos": profile.get("combos", []),
+        "top_cards": [
+            {
+                "name": c["name"],
+                "inclusion_pct": c["inclusion_pct"],
+                "synergy": c["synergy"],
+                "category": c["category"],
+            }
+            for c in profile["cards"][:25]
+        ],
+        "total_cards_tracked": len(profile["cards"]),
+    }

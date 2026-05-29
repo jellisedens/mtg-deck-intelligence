@@ -13,6 +13,7 @@ from openai import OpenAI
 from services.mtg_knowledge import build_knowledge_context, SCRYFALL_SYNTAX_GUIDE
 from services.scryfall import scryfall_service
 from services.vector_search import search_with_context
+from services.edhrec import fetch_commander_profile, format_edhrec_context_for_prompt, get_synergy_cards
 from services.analytics import compute_analytics
 from services.role_classifier import classify_deck_roles
 from services.deck_context import build_deck_context
@@ -432,6 +433,32 @@ async def _handle_suggest(prompt: str, deck_cards: list, deck_info: dict,
         for card in deck_cards:
             existing_cards.add(card.card_name.lower())
 
+    # Fetch EDHREC commander profile (cached on deck)
+    edhrec_profile = None
+    commander_name = None
+    if deck_cards:
+        for card in deck_cards:
+            if card.board == "commander":
+                commander_name = card.card_name
+                break
+    if commander_name and deck_info:
+        profile = deck_info.get("strategy_profile") or {}
+        cached_edhrec = profile.get("edhrec_profile")
+        
+        # Use cached if exists and matches current commander
+        if cached_edhrec and cached_edhrec.get("commander_name", "").lower() == commander_name.lower():
+            edhrec_profile = cached_edhrec
+            print(f"[AI] EDHREC profile (cached): {edhrec_profile['total_decks']} decks for {commander_name}")
+        else:
+            try:
+                edhrec_profile = await fetch_commander_profile(commander_name)
+                if edhrec_profile:
+                    print(f"[AI] EDHREC profile fetched: {edhrec_profile['total_decks']} decks for {commander_name}")
+                    # Cache on strategy profile
+                    _cache_edhrec_profile(deck_info, edhrec_profile)
+            except Exception as e:
+                print(f"[AI] EDHREC fetch failed (non-fatal): {e}")
+
     t_search = time.time()
     search_results = await _execute_searches(
         queries=plan.get("scryfall_queries", []),
@@ -441,6 +468,41 @@ async def _handle_suggest(prompt: str, deck_cards: list, deck_info: dict,
 
     # Vector search — find conceptually similar cards
     search_results = _merge_vector_results(search_results, prompt, deck_info, existing_cards)
+
+    # EDHREC merge — add high-synergy commander cards to search pool
+    if edhrec_profile:
+        t_edhrec = time.time()
+        synergy_cards = get_synergy_cards(edhrec_profile, list(existing_cards), min_synergy=0.2)
+        seen_names = {r["name"].lower() for r in search_results}
+        edhrec_added = 0
+        for ecard in synergy_cards[:20]:
+            if ecard["name"].lower() not in seen_names:
+                try:
+                    card_data = await scryfall_service.get_card_by_name(ecard["name"])
+                    if "error" not in card_data:
+                        search_results.append({
+                            "name": card_data.get("name", ecard["name"]),
+                            "mana_cost": card_data.get("mana_cost", ""),
+                            "cmc": card_data.get("cmc", 0),
+                            "type_line": card_data.get("type_line", ""),
+                            "oracle_text": card_data.get("oracle_text", ""),
+                            "colors": card_data.get("colors", []),
+                            "color_identity": card_data.get("color_identity", []),
+                            "rarity": card_data.get("rarity", ""),
+                            "prices": card_data.get("prices", {}),
+                            "image_uris": card_data.get("image_uris", {}),
+                            "scryfall_id": card_data.get("id", ""),
+                            "edhrec_rank": card_data.get("edhrec_rank"),
+                            "power": card_data.get("power"),
+                            "toughness": card_data.get("toughness"),
+                            "edhrec_inclusion_pct": ecard["inclusion_pct"],
+                            "edhrec_synergy": ecard["synergy"],
+                        })
+                        seen_names.add(ecard["name"].lower())
+                        edhrec_added += 1
+                except Exception:
+                    pass
+        print(f"[AI] EDHREC added {edhrec_added} synergy cards ({time.time() - t_edhrec:.1f}s)")
 
     if len(search_results) < 5:
         t_broaden = time.time()
@@ -474,6 +536,12 @@ async def _handle_suggest(prompt: str, deck_cards: list, deck_info: dict,
             "edhrec_rank": card.get("edhrec_rank"),
         })
 
+    # Inject EDHREC context for prompt builder
+    if edhrec_profile and deck_info:
+        deck_info["_edhrec_context"] = format_edhrec_context_for_prompt(
+            edhrec_profile, list(existing_cards), max_cards=15
+        )
+
     system, user_msg = build_suggest_prompt(
         prompt=prompt,
         plan=plan,
@@ -500,7 +568,31 @@ async def _handle_suggest(prompt: str, deck_cards: list, deck_info: dict,
 
     return result
 
+def _cache_edhrec_profile(deck_info: dict, edhrec_profile: dict):
+    """Save EDHREC profile to the deck's strategy profile."""
+    try:
+        from database.session import SessionLocal
+        from sqlalchemy import text
+        import json
 
+        profile = deck_info.get("strategy_profile") or {}
+        profile["edhrec_profile"] = edhrec_profile
+        deck_info["strategy_profile"] = profile
+
+        # Persist to database if we have a deck reference
+        db = SessionLocal()
+        # Find deck by name from deck_info
+        deck_name = deck_info.get("name")
+        if deck_name:
+            db.execute(
+                text("UPDATE decks SET strategy_profile = :profile WHERE name = :name"),
+                {"profile": json.dumps(profile), "name": deck_name},
+            )
+            db.commit()
+        db.close()
+    except Exception as e:
+        print(f"[AI] Failed to cache EDHREC profile: {e}")
+        
 async def _handle_cuts(prompt: str, deck_info: dict, simulation_data: dict,
                        deck_cards: list, card_lookup: dict) -> dict:
     """Handle cut recommendation requests."""

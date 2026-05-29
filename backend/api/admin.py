@@ -3,7 +3,7 @@ import threading
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import text
-from database.session import get_db
+from database.session import get_db, SessionLocal
 from models.user import User
 from api.deps import get_current_user
 
@@ -88,3 +88,43 @@ async def get_ingest_status(
         "running": ingest_status["running"],
         "result": ingest_status["result"],
     }
+
+@router.post("/backfill-edhrec")
+async def backfill_edhrec(
+    user: User = Depends(get_current_user),
+):
+    """Backfill EDHREC ranks from Scryfall."""
+    if user.email != os.getenv("ADMIN_EMAIL", "jellisedens@gmail.com"):
+        raise HTTPException(status_code=403, detail="Admin only")
+
+    import httpx
+    import json
+
+    headers = {"User-Agent": "MTGDeckIntelligence/1.0", "Accept": "application/json"}
+
+    resp = httpx.get("https://api.scryfall.com/bulk-data", headers=headers, timeout=30)
+    oracle_url = [x for x in resp.json()["data"] if x["type"] == "oracle_cards"][0]["download_uri"]
+
+    resp = httpx.get(oracle_url, headers=headers, timeout=300)
+    raw = resp.json()
+
+    rank_map = {}
+    for c in raw:
+        if c.get("edhrec_rank"):
+            rank_map[c["id"]] = c["edhrec_rank"]
+
+    db = SessionLocal()
+    updated = 0
+    for scryfall_id, rank in rank_map.items():
+        result = db.execute(
+            text("UPDATE cards SET edhrec_rank = :rank WHERE scryfall_id = :sid"),
+            {"rank": rank, "sid": scryfall_id},
+        )
+        updated += result.rowcount
+        if updated % 5000 == 0:
+            db.commit()
+
+    db.commit()
+    db.close()
+
+    return {"status": "complete", "updated": updated}

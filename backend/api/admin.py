@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text
 from database.session import get_db
 from models.user import User
-from api.deps import get_verified_user
+from api.deps import get_current_user
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -61,7 +61,7 @@ def _run_ingest():
 
 @router.post("/ingest-cards")
 async def trigger_ingest(
-    user: User = Depends(get_verified_user),
+    user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """Trigger card database ingest. Admin only."""
@@ -81,7 +81,7 @@ async def trigger_ingest(
 
 @router.get("/ingest-status")
 async def get_ingest_status(
-    user: User = Depends(get_verified_user),
+    user: User = Depends(get_current_user),
 ):
     """Check ingest progress."""
     return {

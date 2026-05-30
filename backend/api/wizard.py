@@ -1,7 +1,9 @@
-from uuid import UUID
+"""
+Deck Wizard - auto-generates a starter shell for new Commander decks.
+"""
+
 import asyncio
-import time
-from concurrent.futures import ThreadPoolExecutor
+from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
@@ -9,233 +11,241 @@ from database.session import get_db
 from models.user import User
 from models.deck import Deck
 from models.deck_card import DeckCard
-from api.deps import get_verified_user
-from services.analytics import compute_analytics
-from services.role_classifier import classify_deck_roles
-from services.strategy_profiler import (
-    generate_base_profile,
-    build_impact_batches,
-    _call_impact_batch,
-    _build_compact_summary,
-    _get_commander_text,
-)
-from services.mana_analyzer import compute_color_health
-from simulation.sim_tags import build_sim_tag_batches, _call_sim_tag_batch
-from simulation.game_engine import run_simulation
+from api.deps import get_current_user
+from services.edhrec import fetch_commander_profile
+from services.scryfall import scryfall_service
 
-router = APIRouter(prefix="/decks", tags=["strategy"])
+router = APIRouter(prefix="/decks", tags=["wizard"])
 
-_executor = ThreadPoolExecutor(max_workers=12)
+BASIC_LAND_MAP = {
+    "W": "Plains",
+    "U": "Island",
+    "B": "Swamp",
+    "R": "Mountain",
+    "G": "Forest",
+}
+
+DUAL_LANDS = {
+    "WU": ["Azorius Guildgate", "Tranquil Cove"],
+    "WB": ["Orzhov Guildgate", "Scoured Barrens"],
+    "WR": ["Boros Guildgate", "Wind-Scarred Crag"],
+    "WG": ["Selesnya Guildgate", "Blossoming Sands"],
+    "UB": ["Dimir Guildgate", "Dismal Backwater"],
+    "UR": ["Izzet Guildgate", "Swiftwater Cliffs"],
+    "UG": ["Simic Guildgate", "Thornwood Falls"],
+    "BR": ["Rakdos Guildgate", "Bloodfell Caves"],
+    "BG": ["Golgari Guildgate", "Jungle Hollow"],
+    "RG": ["Gruul Guildgate", "Rugged Highlands"],
+}
+
+COLORLESS_UTILITY_LANDS = [
+    "Command Tower",
+    "Exotic Orchard",
+    "Path of Ancestry",
+]
 
 
-@router.post("/{deck_id}/strategy", response_model=dict)
-async def generate_deck_strategy(
+def _build_mana_base(color_identity, total_lands=37):
+    """Generate a balanced mana base for a Commander deck."""
+    colors = [c for c in "WUBRG" if c in color_identity]
+    lands = []
+
+    if not colors:
+        lands.append("Command Tower")
+        lands.append("Reliquary Tower")
+        lands.append("Rogue's Passage")
+        remaining = total_lands - len(lands)
+        for _ in range(remaining):
+            lands.append("Wastes")
+        return lands
+
+    lands.extend(COLORLESS_UTILITY_LANDS[:min(3, total_lands)])
+
+    if len(colors) >= 2:
+        for i in range(len(colors)):
+            for j in range(i + 1, len(colors)):
+                pair = colors[i] + colors[j]
+                pair_lands = DUAL_LANDS.get(pair, [])
+                for land in pair_lands[:1]:
+                    if len(lands) < total_lands:
+                        lands.append(land)
+
+    remaining = total_lands - len(lands)
+    if remaining > 0:
+        basics_per_color = remaining // len(colors)
+        extras = remaining % len(colors)
+        for i, color in enumerate(colors):
+            count = basics_per_color + (1 if i < extras else 0)
+            basic_name = BASIC_LAND_MAP[color]
+            for _ in range(count):
+                lands.append(basic_name)
+
+    return lands
+
+
+def _select_edhrec_cards(profile, color_identity, max_cards=28, budget=None):
+    """Select the best cards from EDHREC data for a starter shell."""
+    cards = profile.get("cards", [])
+    non_land_cards = [
+        c for c in cards
+        if c.get("category") not in ("land", "utility_land")
+    ]
+    for card in non_land_cards:
+        card["_score"] = card["inclusion_pct"] + (card.get("synergy", 0) * 100)
+    non_land_cards.sort(key=lambda c: c["_score"], reverse=True)
+    selected = non_land_cards[:max_cards]
+    for card in selected:
+        card.pop("_score", None)
+    return selected
+
+
+@router.post("/{deck_id}/wizard/generate-shell")
+async def generate_deck_shell(
     deck_id: UUID,
-    user: User = Depends(get_verified_user),
+    user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """
-    Generate a strategic profile with fully parallelized AI calls.
-    """
+    """Auto-generate a starter shell for a Commander deck."""
     deck = db.query(Deck).filter(Deck.id == deck_id).first()
     if not deck:
         raise HTTPException(status_code=404, detail="Deck not found")
     if deck.user_id != user.id:
         raise HTTPException(status_code=403, detail="Not your deck")
+    if deck.format != "commander":
+        raise HTTPException(status_code=400, detail="Shell generation is only for Commander")
 
-    cards = db.query(DeckCard).filter(DeckCard.deck_id == deck.id).all()
-    if not cards:
-        raise HTTPException(status_code=400, detail="Deck has no cards")
+    commander = db.query(DeckCard).filter(
+        DeckCard.deck_id == deck.id,
+        DeckCard.board == "commander",
+    ).first()
+    if not commander:
+        raise HTTPException(status_code=400, detail="No commander set")
 
-    total_start = time.time()
-    loop = asyncio.get_event_loop()
+    existing_cards = db.query(DeckCard).filter(DeckCard.deck_id == deck.id).all()
+    existing_names = {c.card_name.lower() for c in existing_cards}
+    existing_count = sum(c.quantity for c in existing_cards)
 
-    # Step 1: Analytics only - Scryfall fetch (fast, ~2s)
-    t = time.time()
-    analytics = await compute_analytics(cards, include_card_data=True)
-    card_lookup = analytics.pop("_card_lookup", {})
-    deck_info = {
-        "name": deck.name,
-        "format": deck.format,
-        "description": deck.description,
-        "preferences": deck.preferences,
-    }
-    print(f"TIMING: analytics (Scryfall) = {time.time() - t:.1f}s")
+    slots_available = 100 - existing_count
+    if slots_available <= 0:
+        raise HTTPException(status_code=400, detail="Deck is already at 100 cards")
 
-    # Step 2: PARALLEL PHASE 1 - role classification + base profile + sim tag batches
-    # These are independent of each other
-    t = time.time()
+    commander_data = await scryfall_service.get_card_by_name(commander.card_name)
+    if "error" in commander_data:
+        raise HTTPException(status_code=502, detail="Failed to fetch commander data")
 
-    role_future = loop.run_in_executor(
-        _executor,
-        lambda: classify_deck_roles(cards, card_lookup, deck_info)
-    )
+    color_identity = commander_data.get("color_identity", [])
+    budget = (deck.preferences or {}).get("budget")
 
-    profile_future = loop.run_in_executor(
-        _executor,
-        lambda: generate_base_profile(
-            deck_info=deck_info, deck_cards=cards, card_lookup=card_lookup,
-            analytics=analytics,
-            role_data={"primary_creature_type": "None", "role_distribution": {}, "card_roles": []},
+    edhrec_profile = await fetch_commander_profile(commander.card_name)
+
+    added_cards = []
+    cards_to_add = []
+
+    # Auto-includes
+    auto_includes = ["Sol Ring"]
+    for card_name in auto_includes:
+        if card_name.lower() not in existing_names:
+            cards_to_add.append(card_name)
+            existing_names.add(card_name.lower())
+
+    # EDHREC staples
+    land_slots = 37
+    if edhrec_profile:
+        spell_slots = slots_available - land_slots - len(cards_to_add)
+        spell_slots = max(spell_slots, 15)
+        edhrec_picks = _select_edhrec_cards(
+            edhrec_profile, color_identity,
+            max_cards=spell_slots, budget=budget,
         )
-    )
+        for pick in edhrec_picks:
+            if pick["name"].lower() not in existing_names:
+                cards_to_add.append(pick["name"])
+                existing_names.add(pick["name"].lower())
 
-    # Prep sim tag batches (no AI, instant)
-    sim_tag_batches = build_sim_tag_batches(cards, card_lookup)
-
-    # Launch sim tag batches immediately - they don't depend on profile or roles
-    sim_tag_futures = []
-    for system_prompt, user_msg, batch in sim_tag_batches:
-        future = loop.run_in_executor(
-            _executor,
-            lambda s=system_prompt, u=user_msg, b=batch: _call_sim_tag_batch(s, u, b)
-        )
-        sim_tag_futures.append(future)
-
-    # Wait for roles + profile (needed before impact batches)
-    role_data, profile = await asyncio.gather(role_future, profile_future)
-    print(f"TIMING: phase 1 (roles + profile + sim tags started) = {time.time() - t:.1f}s")
-
-    if "error" in profile:
-        raise HTTPException(status_code=502, detail=f"Strategy generation failed: {profile['error']}")
-
-    # Step 3: PARALLEL PHASE 2 - impact batches (need profile) + wait for sim tags
-    t = time.time()
-    impact_batches = build_impact_batches(
-        deck_info=deck_info, deck_cards=cards, card_lookup=card_lookup,
-        analytics=analytics, role_data=role_data, profile=profile,
-    )
-    print(f"TIMING: {len(impact_batches)} impact + {len(sim_tag_batches)} sim tag batches")
-
-    # Launch impact batches
-    impact_futures = []
-    for system_prompt, user_msg in impact_batches:
-        future = loop.run_in_executor(
-            _executor,
-            lambda s=system_prompt, u=user_msg: _call_impact_batch(s, u)
-        )
-        impact_futures.append(future)
-
-    # Wait for ALL remaining tasks (impact batches + sim tag batches still running)
-    all_remaining = impact_futures + sim_tag_futures
-    completed = await asyncio.gather(*all_remaining, return_exceptions=True)
-    print(f"TIMING: phase 2 (impact + sim tags) = {time.time() - t:.1f}s")
-
-    # Split results
-    impact_results = completed[:len(impact_futures)]
-    sim_tag_results = completed[len(impact_futures):]
-
-    # Merge impact ratings
-    all_ratings = []
-    for batch_result in impact_results:
-        if batch_result and isinstance(batch_result, list):
-            all_ratings.extend(batch_result)
-
-    seen = set()
-    deduped = []
-    for rating in all_ratings:
-        name = rating.get("card_name", "").lower()
-        if name not in seen:
-            seen.add(name)
-            deduped.append(rating)
-    profile["card_impact_ratings"] = deduped
-
-    # Merge sim tags
-    sim_tags = {}
-    for batch_result in sim_tag_results:
-        if batch_result and isinstance(batch_result, dict):
-            sim_tags.update(batch_result)
-    profile["sim_tags"] = sim_tags
-
-    # Step 4: Compact summary (instant)
-    commander_text = _get_commander_text(cards, card_lookup)
-    profile["deck_summary"] = _build_compact_summary(
-        deck_info=deck_info, analytics=analytics, role_data=role_data,
-        profile=profile, commander_text=commander_text,
-    )
-
-    # Step 5: Simulation + color health (fast, ~1-3s)
-    t = time.time()
-    main_deck_cards = []
-    for card in cards:
-        if card.board != "main":
+    # Mana base
+    land_names = _build_mana_base(color_identity, total_lands=land_slots)
+    basic_names = set(BASIC_LAND_MAP.values()) | {"Wastes"}
+    land_counts = {}
+    for land in land_names:
+        if land.lower() in existing_names and land not in basic_names:
             continue
-        card_data = card_lookup.get(card.scryfall_id)
-        if card_data:
-            main_deck_cards.append({"card_data": card_data, "quantity": card.quantity})
+        land_counts[land] = land_counts.get(land, 0) + 1
 
-    sim_results = {}
-    if main_deck_cards:
-        sim_results = run_simulation(
-            deck_cards=main_deck_cards, sim_tags=sim_tags, n_games=500, turns=10,
-        )
-        profile["cached_simulation"] = sim_results
-        color_health = compute_color_health(sim_results, analytics)
-        profile["color_health"] = color_health
-    print(f"TIMING: simulation + color health = {time.time() - t:.1f}s")
+    # Resolve non-land cards via Scryfall
+    total_resolved = 0
+    for i in range(0, len(cards_to_add), 10):
+        batch = cards_to_add[i:i + 10]
+        for card_name in batch:
+            try:
+                card_data = await scryfall_service.get_card_by_name(card_name)
+                if "error" in card_data:
+                    continue
+                card_ci = set(card_data.get("color_identity", []))
+                deck_ci = set(color_identity)
+                if not card_ci.issubset(deck_ci):
+                    continue
+                card = DeckCard(
+                    deck_id=deck.id,
+                    scryfall_id=card_data["id"],
+                    card_name=card_data["name"],
+                    quantity=1,
+                    board="main",
+                )
+                db.add(card)
+                added_cards.append({
+                    "card_name": card_data["name"],
+                    "scryfall_id": card_data["id"],
+                    "type": "spell",
+                    "source": "edhrec" if edhrec_profile else "auto",
+                    "image_uri": card_data.get("image_uris", {}).get("small", ""),
+                })
+                total_resolved += 1
+            except Exception as e:
+                print(f"[Wizard] Failed to resolve {card_name}: {e}")
+                continue
 
-    # Role data
-    profile["role_data"] = {
-        "role_distribution": role_data.get("role_distribution", {}),
-        "card_roles": role_data.get("card_roles", []),
-        "primary_creature_type": role_data.get("primary_creature_type"),
-    }
+    # Resolve lands
+    for land_name, qty in land_counts.items():
+        try:
+            card_data = await scryfall_service.get_card_by_name(land_name)
+            if "error" in card_data:
+                continue
+            if land_name not in basic_names and land_name.lower() in existing_names:
+                continue
+            card = DeckCard(
+                deck_id=deck.id,
+                scryfall_id=card_data["id"],
+                card_name=card_data["name"],
+                quantity=qty,
+                board="main",
+            )
+            db.add(card)
+            added_cards.append({
+                "card_name": card_data["name"],
+                "scryfall_id": card_data["id"],
+                "type": "land",
+                "quantity": qty,
+                "source": "mana_base",
+                "image_uri": card_data.get("image_uris", {}).get("small", ""),
+            })
+            total_resolved += qty
+        except Exception as e:
+            print(f"[Wizard] Failed to resolve land {land_name}: {e}")
+            continue
 
-    # Save strategy profile
-    deck.strategy_profile = profile
-
-    # Write per-card AI context to deck_cards
-    impact_lookup = {}
-    for rating in deduped:
-        impact_lookup[rating.get("card_name", "").lower()] = rating
-
-    role_lookup = {}
-    for cr in role_data.get("card_roles", []):
-        role_lookup[cr["name"].lower()] = cr
-
-    for card in cards:
-        card_name_lower = card.card_name.lower()
-        impact = impact_lookup.get(card_name_lower, {})
-        role_info = role_lookup.get(card_name_lower, {})
-
-        card.ai_context = {
-            "role": role_info.get("primary_role", "unknown"),
-            "secondary_roles": role_info.get("secondary_roles", []),
-            "impact_score": impact.get("score", None),
-            "impact_reason": impact.get("reason", None),
-            "synergy_notes": role_info.get("synergy_notes", ""),
-            "is_critical": card.card_name in profile.get("critical_cards", []),
-        }
+    if edhrec_profile:
+        profile = deck.strategy_profile or {}
+        profile["edhrec_profile"] = edhrec_profile
+        deck.strategy_profile = profile
 
     db.commit()
-    db.refresh(deck)
 
-    print(f"TIMING: TOTAL = {time.time() - total_start:.1f}s")
-
-    response = {k: v for k, v in profile.items() if k not in ("sim_tags",)}
-    response["sim_tags_generated"] = len(sim_tags)
-    response["roles_classified"] = len(role_data.get("card_roles", []))
-    response["simulation_games"] = sim_results.get("games_simulated", 0) if main_deck_cards else 0
-
-    return response
-
-
-@router.get("/{deck_id}/strategy", response_model=dict)
-async def get_deck_strategy(
-    deck_id: UUID,
-    user: User = Depends(get_verified_user),
-    db: Session = Depends(get_db),
-):
-    """Get the stored strategic profile for a deck."""
-    deck = db.query(Deck).filter(Deck.id == deck_id).first()
-    if not deck:
-        raise HTTPException(status_code=404, detail="Deck not found")
-    if deck.user_id != user.id:
-        raise HTTPException(status_code=403, detail="Not your deck")
-
-    if not deck.strategy_profile:
-        raise HTTPException(status_code=404, detail="No strategy profile generated yet.")
-
-    profile = deck.strategy_profile
-    response = {k: v for k, v in profile.items() if k not in ("sim_tags",)}
-    return response
+    return {
+        "status": "ok",
+        "commander": commander.card_name,
+        "color_identity": color_identity,
+        "cards_added": len(added_cards),
+        "total_deck_size": existing_count + total_resolved,
+        "edhrec_decks_analyzed": edhrec_profile["total_decks"] if edhrec_profile else 0,
+        "cards": added_cards,
+    }

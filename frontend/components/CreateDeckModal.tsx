@@ -194,7 +194,7 @@ export default function CreateDeckModal({ onClose, onCreated }: Props) {
         setShellMessage(SHELL_MESSAGES[0]);
 
         try {
-          const token = localStorage.getItem("token");
+          const token = localStorage.getItem("mtg_token");
           const res = await fetch(`${API_URL}/decks/${deck.id}/wizard/generate-shell`, {
             method: "POST",
             headers: {

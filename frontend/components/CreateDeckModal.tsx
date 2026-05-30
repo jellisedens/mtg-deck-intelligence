@@ -4,6 +4,8 @@ import { useState, useEffect, FormEvent } from "react";
 import { createDeck, autocompleteCards, searchCards, addCard, updateDeckPreferences } from "@/lib/api";
 import { Deck, ScryfallCard } from "@/lib/types";
 
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8001";
+
 const FORMATS = [
   "commander",
   "standard",
@@ -22,13 +24,21 @@ const POWER_LEVELS = [
   { value: "cedh", label: "cEDH — competitive" },
 ];
 
+const SHELL_MESSAGES = [
+  "fetching EDHREC data...",
+  "analyzing commander synergies...",
+  "building mana base...",
+  "selecting staples...",
+  "assembling your deck...",
+];
+
 interface Props {
   onClose: () => void;
   onCreated: (deck: Deck) => void;
 }
 
 export default function CreateDeckModal({ onClose, onCreated }: Props) {
-  const [step, setStep] = useState<"basics" | "commander" | "preferences">("basics");
+  const [step, setStep] = useState<"basics" | "commander" | "preferences" | "generating">("basics");
 
   // Step 1: Basics
   const [name, setName] = useState("");
@@ -48,10 +58,32 @@ export default function CreateDeckModal({ onClose, onCreated }: Props) {
   const [strategyNotes, setStrategyNotes] = useState("");
   const [budget, setBudget] = useState("");
 
+  // Step 4: Generating
+  const [generateShell, setGenerateShell] = useState(true);
+  const [shellProgress, setShellProgress] = useState(0);
+  const [shellMessage, setShellMessage] = useState(SHELL_MESSAGES[0]);
+  const [shellResult, setShellResult] = useState<{
+    cards_added: number;
+    total_deck_size: number;
+    edhrec_decks_analyzed: number;
+  } | null>(null);
+
   // Shared
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-  const [createdDeck, setCreatedDeck] = useState<Deck | null>(null);
+
+  // Animate shell progress messages
+  useEffect(() => {
+    if (step !== "generating") return;
+    const interval = setInterval(() => {
+      setShellProgress((prev) => {
+        const next = Math.min(prev + 1, SHELL_MESSAGES.length - 1);
+        setShellMessage(SHELL_MESSAGES[next]);
+        return next;
+      });
+    }, 2500);
+    return () => clearInterval(interval);
+  }, [step]);
 
   // Commander autocomplete
   useEffect(() => {
@@ -77,13 +109,11 @@ export default function CreateDeckModal({ onClose, onCreated }: Props) {
     setShowDropdown(false);
     setSearchingCommander(true);
     try {
-      // Search for the exact card to check if it's legendary
       const results = await searchCards(`!"${cardName}" t:legendary`);
       if (results.length > 0) {
         setSelectedCommander(results[0]);
         setCommanderResults([]);
       } else {
-        // Not legendary — search without the type filter to show the card
         const allResults = await searchCards(`!"${cardName}"`);
         if (allResults.length > 0) {
           setError(`${cardName} is not a legendary creature. Choose a legendary creature as your commander.`);
@@ -103,17 +133,14 @@ export default function CreateDeckModal({ onClose, onCreated }: Props) {
   async function handleBasicsSubmit(e: FormEvent) {
     e.preventDefault();
     setError("");
-
     if (!name.trim()) {
       setError("Deck name is required");
       return;
     }
-
     if (format === "commander") {
       setStep("commander");
     } else {
-      // Non-commander formats skip straight to creation
-      await createAndFinish();
+      await createAndFinish(false);
     }
   }
 
@@ -128,10 +155,10 @@ export default function CreateDeckModal({ onClose, onCreated }: Props) {
 
   async function handlePreferencesSubmit() {
     setError("");
-    await createAndFinish();
+    await createAndFinish(generateShell);
   }
 
-  async function createAndFinish() {
+  async function createAndFinish(shouldGenerateShell: boolean) {
     setLoading(true);
     try {
       // Create the deck
@@ -160,9 +187,45 @@ export default function CreateDeckModal({ onClose, onCreated }: Props) {
         });
       }
 
+      // Generate starter shell if requested
+      if (shouldGenerateShell && format === "commander" && selectedCommander) {
+        setStep("generating");
+        setShellProgress(0);
+        setShellMessage(SHELL_MESSAGES[0]);
+
+        try {
+          const token = localStorage.getItem("token");
+          const res = await fetch(`${API_URL}/decks/${deck.id}/wizard/generate-shell`, {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${token}`,
+              "Content-Type": "application/json",
+            },
+          });
+
+          if (res.ok) {
+            const result = await res.json();
+            setShellResult({
+              cards_added: result.cards_added,
+              total_deck_size: result.total_deck_size,
+              edhrec_decks_analyzed: result.edhrec_decks_analyzed,
+            });
+
+            // Brief pause to show the result before redirecting
+            await new Promise((r) => setTimeout(r, 1500));
+          } else {
+            // Shell generation failed — still redirect, deck was created
+            console.error("Shell generation failed:", await res.text());
+          }
+        } catch (err) {
+          console.error("Shell generation error:", err);
+        }
+      }
+
       onCreated(deck);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Failed to create deck");
+      setStep("preferences"); // Go back so user can retry
     } finally {
       setLoading(false);
     }
@@ -173,13 +236,13 @@ export default function CreateDeckModal({ onClose, onCreated }: Props) {
   }
 
   function handleSkipPreferences() {
-    createAndFinish();
+    createAndFinish(false);
   }
 
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
-      onClick={onClose}
+      onClick={step === "generating" ? undefined : onClose}
     >
       <div
         className="panel p-6 w-full max-w-md mx-4"
@@ -190,12 +253,12 @@ export default function CreateDeckModal({ onClose, onCreated }: Props) {
             {step === "basics" && "New Deck"}
             {step === "commander" && "Choose Commander"}
             {step === "preferences" && "Deck Preferences"}
+            {step === "generating" && "Building Deck"}
           </div>
           <div className="flex items-center gap-3">
-            {/* Step indicator */}
             {format === "commander" && (
               <div className="flex gap-1">
-                {["basics", "commander", "preferences"].map((s, i) => (
+                {["basics", "commander", "preferences", "generating"].map((s) => (
                   <div
                     key={s}
                     className={`w-1.5 h-1.5 rounded-full ${
@@ -205,12 +268,14 @@ export default function CreateDeckModal({ onClose, onCreated }: Props) {
                 ))}
               </div>
             )}
-            <button
-              onClick={onClose}
-              className="text-text-muted hover:text-text-primary transition-colors"
-            >
-              ✕
-            </button>
+            {step !== "generating" && (
+              <button
+                onClick={onClose}
+                className="text-text-muted hover:text-text-primary transition-colors"
+              >
+                ✕
+              </button>
+            )}
           </div>
         </div>
 
@@ -275,7 +340,6 @@ export default function CreateDeckModal({ onClose, onCreated }: Props) {
               Search for a legendary creature to lead your deck.
             </p>
 
-            {/* Commander search */}
             <div className="relative">
               <label className="block text-xs text-text-secondary mb-1.5">commander</label>
               <input
@@ -305,7 +369,6 @@ export default function CreateDeckModal({ onClose, onCreated }: Props) {
               )}
             </div>
 
-            {/* Selected commander preview */}
             {searchingCommander && (
               <div className="text-xs text-text-muted">
                 searching...<span className="animate-pulse">█</span>
@@ -395,6 +458,24 @@ export default function CreateDeckModal({ onClose, onCreated }: Props) {
               />
             </div>
 
+            {/* Auto-generate toggle */}
+            {format === "commander" && selectedCommander && (
+              <div className="flex items-center gap-3 p-3 bg-bg-primary rounded border border-border">
+                <input
+                  type="checkbox"
+                  id="generate-shell"
+                  checked={generateShell}
+                  onChange={(e) => setGenerateShell(e.target.checked)}
+                  className="accent-accent-green"
+                />
+                <label htmlFor="generate-shell" className="text-xs text-text-secondary cursor-pointer">
+                  <span className="text-text-primary font-medium">Auto-generate starter deck</span>
+                  <br />
+                  Adds ~60 cards based on EDHREC community data. You can edit everything after.
+                </label>
+              </div>
+            )}
+
             <div className="flex gap-2 pt-2">
               <button onClick={() => format === "commander" ? setStep("commander") : setStep("basics")} className="btn-ghost flex-1">← back</button>
               <button onClick={handleSkipPreferences} className="btn-ghost text-xs text-text-muted">skip</button>
@@ -405,10 +486,60 @@ export default function CreateDeckModal({ onClose, onCreated }: Props) {
               >
                 {loading ? (
                   <span>creating<span className="animate-pulse">...</span></span>
+                ) : generateShell && format === "commander" && selectedCommander ? (
+                  "create & build →"
                 ) : (
                   "create deck →"
                 )}
               </button>
+            </div>
+          </div>
+        )}
+
+        {/* Step 4: Generating Shell */}
+        {step === "generating" && (
+          <div className="space-y-6 py-4">
+            <div className="text-center">
+              {!shellResult ? (
+                <>
+                  <div className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-accent-green/10 mb-4">
+                    <svg className="w-6 h-6 text-accent-green animate-spin" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                    </svg>
+                  </div>
+                  <p className="text-sm text-text-primary font-medium mb-2">
+                    Building your {selectedCommander?.name} deck
+                  </p>
+                  <p className="text-xs text-text-muted animate-pulse">
+                    {shellMessage}
+                  </p>
+                  {/* Progress bar */}
+                  <div className="mt-4 mx-8 h-1 bg-bg-tertiary rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-accent-green rounded-full transition-all duration-1000 ease-out"
+                      style={{ width: `${((shellProgress + 1) / SHELL_MESSAGES.length) * 100}%` }}
+                    />
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-accent-green/10 mb-4">
+                    <svg className="w-6 h-6 text-accent-green" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                    </svg>
+                  </div>
+                  <p className="text-sm text-text-primary font-medium mb-1">
+                    Deck ready!
+                  </p>
+                  <p className="text-xs text-text-muted">
+                    {shellResult.cards_added} cards added from {shellResult.edhrec_decks_analyzed.toLocaleString()} community decks
+                  </p>
+                  <p className="text-xs text-text-muted mt-1">
+                    {shellResult.total_deck_size}/100 cards — use the AI panel to fill the rest
+                  </p>
+                </>
+              )}
             </div>
           </div>
         )}

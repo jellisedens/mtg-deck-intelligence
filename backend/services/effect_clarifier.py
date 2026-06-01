@@ -106,12 +106,9 @@ def check_for_effect_clarification(prompt: str) -> dict | None:
     if len(prompt_lower.split()) >= 8:
         return None
 
-    # Don't clarify if the user has action words — they've already refined
-    action_words = [
-        "suggest", "find", "recommend", "show", "list", "give",
-        "need", "want", "looking for", "search", "get me",
-    ]
-    if any(word in prompt_lower for word in action_words):
+    # Don't clarify if this is a rewritten clarification response from the frontend
+    # The frontend rewrites options as "suggest X for Y" — skip those
+    if re.search(r'^suggest\s+.+\s+for\s+\w+$', prompt_lower):
         return None
 
     # Don't clarify if this IS a clarification response (user already refined)

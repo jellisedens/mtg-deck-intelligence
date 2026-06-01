@@ -73,33 +73,36 @@ def _filter_by_color_identity(results: list, deck_color_identity: list) -> list:
 def _extract_prompt_requirements(prompt: str) -> list[str]:
     """
     Extract specific mechanical requirements from the user's prompt.
-    Detects when the user wants a specific effect (trample, lifelink, etc.)
-    vs a general category (ramp, removal, card draw).
+    Detects MTG keywords/mechanics the user is asking for.
     Returns oracle text terms that results should contain.
     """
     prompt_lower = prompt.lower()
-    requirements = []
 
-    effect_patterns = [
-        r'\b(?:give|gives|grant|grants|have|has|with|gain|gains)\s+([\w\s]+?)(?:\s+to|\s+for|\s*$|\s*,)',
-        r'\bcards?\s+(?:that|which)\s+(?:give|grant|provide|add)\s+([\w\s]+?)(?:\s+to|\s*$|\s*,)',
-        r'\b(?:need|want|looking for)\s+([\w\s]+?)\s+(?:cards?|spells?|equipment|auras?)',
+    # Only activate when the user is asking for a specific effect
+    # (not general categories like "ramp" or "removal")
+    intent_words = ["give", "grant", "with", "has", "gain", "that have",
+                     "that give", "that grant", "that provide"]
+    has_intent = any(w in prompt_lower for w in intent_words)
+    if not has_intent:
+        return []
+
+    # MTG mechanics — these are game rules terminology, not card suggestions
+    mechanics = [
+        "trample", "flying", "hexproof", "indestructible", "haste",
+        "deathtouch", "lifelink", "vigilance", "menace", "double strike",
+        "first strike", "reach", "flash", "ward", "shroud",
+        "unblockable", "can't be blocked", "protection from",
+        "defender", "prowess", "cascade", "annihilator",
+        "infect", "wither", "persist", "undying", "myriad",
+        "equip", "totem armor", "regenerate",
     ]
 
-    noise = {"some", "more", "good", "best", "cheap", "budget", "new", "cards",
-             "card", "my", "the", "a", "that", "can", "commander", "creatures"}
+    found = []
+    for mechanic in mechanics:
+        if mechanic in prompt_lower:
+            found.append(mechanic)
 
-    for pattern in effect_patterns:
-        matches = re.findall(pattern, prompt_lower)
-        for match in matches:
-            term = match.strip()
-            words = [w for w in term.split() if w not in noise]
-            if words:
-                cleaned = " ".join(words)
-                if len(cleaned) >= 3:
-                    requirements.append(cleaned)
-
-    return requirements
+    return found
 
 
 def _prioritize_by_relevance(results: list, requirements: list) -> list:
@@ -658,7 +661,7 @@ async def _handle_suggest(prompt: str, deck_cards: list, deck_info: dict,
     # Inject specific requirements into the plan so the prompt builder can use them
     if requirements:
         plan["_requirements"] = requirements
-        
+
     system, user_msg = build_suggest_prompt(
         prompt=prompt,
         plan=plan,

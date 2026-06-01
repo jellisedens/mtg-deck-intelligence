@@ -105,8 +105,8 @@ def _extract_prompt_requirements(prompt: str) -> list[str]:
 def _prioritize_by_relevance(results: list, requirements: list) -> list:
     """
     When the user asked for a specific effect, prioritize cards that
-    actually mention it in their oracle text. Non-matching cards get
-    pushed to the back, not removed.
+    actually mention it in their oracle text. Non-matching cards are
+    capped to prevent them from drowning out relevant results.
     """
     if not requirements:
         return results
@@ -127,6 +127,10 @@ def _prioritize_by_relevance(results: list, requirements: list) -> list:
 
     if matching:
         print(f"[AI] Relevance filter: {len(matching)} match {requirements}, {len(non_matching)} don't")
+        # Cap non-matching cards — only include a few as fallback
+        max_fallback = max(3, len(matching) // 3)
+        non_matching = non_matching[:max_fallback]
+        print(f"[AI] Capped non-matching to {len(non_matching)} fallback cards")
 
     return matching + non_matching
 
@@ -651,6 +655,10 @@ async def _handle_suggest(prompt: str, deck_cards: list, deck_info: dict,
             edhrec_profile, list(existing_cards), max_cards=15
         )
 
+    # Inject specific requirements into the plan so the prompt builder can use them
+    if requirements:
+        plan["_requirements"] = requirements
+        
     system, user_msg = build_suggest_prompt(
         prompt=prompt,
         plan=plan,

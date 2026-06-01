@@ -320,6 +320,12 @@ Rules:
     max_results = plan.get("max_results", 10)
     user_msg = f"User request: {prompt}\n\n"
 
+    # If specific mechanical requirements were detected, tell the AI
+    requirements = plan.get("_requirements", [])
+    if requirements:
+        user_msg += f"CRITICAL REQUIREMENT: The user is asking specifically for cards that mention: {', '.join(requirements)}.\n"
+        user_msg += "STRONGLY PREFER cards whose oracle text contains these terms. Only suggest cards WITHOUT these terms if fewer than 3 matching cards are available.\n\n"
+
     if deck_summary:
         user_msg += f"Deck summary:\n{deck_summary}\n\n"
 

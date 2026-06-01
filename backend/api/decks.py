@@ -341,6 +341,12 @@ def add_card(
     _patch_strategy_card_added(deck, request.card_name, request.scryfall_id)
     if deck.strategy_profile is not None:
         flag_modified(deck, "strategy_profile")
+    # Store color identity when commander is set
+    if request.board == "commander" and request.color_identity:
+        prefs = deck.preferences or {}
+        prefs["color_identity"] = request.color_identity
+        deck.preferences = prefs
+        flag_modified(deck, "preferences")
     db.commit()
     # Log to deck intelligence (separate commit to not interfere with card add)
     try:

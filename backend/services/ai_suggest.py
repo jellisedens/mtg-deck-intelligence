@@ -29,6 +29,47 @@ MODEL = "gpt-4o-mini"
 
 logger = logging.getLogger(__name__)
 
+def _get_deck_color_identity(deck_info: dict = None, deck_cards: list = None, card_lookup: dict = None) -> list:
+    """Get deck's color identity from multiple sources (fallback chain)."""
+    if deck_info:
+        # Source 1: preferences (set when commander is added)
+        prefs = deck_info.get("preferences") or {}
+        ci = prefs.get("color_identity")
+        if ci:
+            return ci
+        # Source 2: strategy profile
+        profile = deck_info.get("strategy_profile") or {}
+        ci = profile.get("color_identity")
+        if ci:
+            return ci
+    # Source 3: compute from commander in card_lookup
+    if deck_cards and card_lookup:
+        for card in deck_cards:
+            if card.board == "commander":
+                card_data = card_lookup.get(card.scryfall_id, {})
+                ci = card_data.get("color_identity")
+                if ci:
+                    return ci
+    return []
+
+
+def _filter_by_color_identity(results: list, deck_color_identity: list) -> list:
+    """Hard post-filter: remove any card whose color identity isn't a subset of the deck's."""
+    if not deck_color_identity:
+        return results
+    deck_ci = set(deck_color_identity)
+    filtered = []
+    removed = 0
+    for card in results:
+        card_ci = set(card.get("color_identity", []))
+        if card_ci.issubset(deck_ci):
+            filtered.append(card)
+        else:
+            removed += 1
+    if removed > 0:
+        print(f"[AI] Color identity filter removed {removed} illegal cards")
+    return filtered
+
 def _extract_requested_count(prompt: str) -> int | None:
     """Extract explicit count from prompt like 'suggest 10 cards' or 'show me all'."""
     prompt_lower = prompt.lower()
@@ -359,8 +400,7 @@ def _merge_vector_results(search_results: list, prompt: str, deck_info: dict, ex
         deck_colors = None
         deck_format = "commander"
         if deck_info:
-            profile = deck_info.get("strategy_profile") or {}
-            deck_colors = profile.get("color_identity")
+            deck_colors = _get_deck_color_identity(deck_info)
             deck_format = deck_info.get("format", "commander")
 
         vector_results = search_with_context(
@@ -508,6 +548,10 @@ async def _handle_suggest(prompt: str, deck_cards: list, deck_info: dict,
         t_broaden = time.time()
         search_results = await _broaden_search(prompt, plan, deck_context, search_results, existing_cards)
         print(f"[AI] Broadened to {len(search_results)} ({time.time() - t_broaden:.1f}s)")
+
+    # Hard color identity filter — catch anything that slipped through
+    deck_ci = _get_deck_color_identity(deck_info, deck_cards, card_lookup)
+    search_results = _filter_by_color_identity(search_results, deck_ci)
 
     # Build focused prompt — scale results to requested count
     # Default to 5 unless user explicitly asked for more
@@ -851,8 +895,7 @@ def _try_direct_queries(prompt: str, deck_info: dict = None) -> dict | None:
     
     if deck_info:
         fmt = deck_info.get("format", "commander") or "commander"
-        profile = deck_info.get("strategy_profile") or {}
-        colors = profile.get("color_identity", [])
+        colors = _get_deck_color_identity(deck_info)
         if colors:
             # Scryfall expects WUBRG order
             wubrg_order = "WUBRG"

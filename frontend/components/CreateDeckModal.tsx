@@ -190,6 +190,7 @@ export default function CreateDeckModal({ onClose, onCreated }: Props) {
           card_name: selectedCommander.name,
           quantity: 1,
           board: "commander",
+          color_identity: selectedCommander.color_identity || [],
         });
       }
 

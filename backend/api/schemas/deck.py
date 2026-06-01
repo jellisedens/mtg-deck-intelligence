@@ -66,6 +66,7 @@ class CardAdd(BaseModel):
     card_name: str
     quantity: int = 1
     board: str = "main"
+    color_identity: Optional[list[str]] = None
 
 
 class CardUpdate(BaseModel):

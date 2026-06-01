@@ -103,11 +103,12 @@ export interface CreateDeckRequest {
 }
 
 export interface AddCardRequest {
-  scryfall_id: string;
-  card_name: string;
-  quantity: number;
-  board: "main" | "sideboard" | "commander";
-}
+    scryfall_id: string;
+    card_name: string;
+    quantity: number;
+    board: "main" | "sideboard" | "commander";
+    color_identity?: string[];
+  }
 
 // ── Analytics ────────────────────────────────────────
 export interface ManaCurveEntry {

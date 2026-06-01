@@ -213,7 +213,7 @@ function AIResponse({
               {response.clarification_options.map((option, i) => (
                 <button
                   key={i}
-                  onClick={() => onOptionClick?.(option.label)}
+                  onClick={() => onOptionClick?.(option.description || option.label)}
                   className="block w-full text-left text-xs text-text-secondary hover:text-accent-green px-3 py-1.5 rounded hover:bg-bg-hover transition-colors border border-border"
                 >
                   <span className="text-accent-green mr-1">→</span>

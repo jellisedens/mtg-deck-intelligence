@@ -106,6 +106,14 @@ def check_for_effect_clarification(prompt: str) -> dict | None:
     if len(prompt_lower.split()) >= 8:
         return None
 
+    # Don't clarify if the user has action words — they've already refined
+    action_words = [
+        "suggest", "find", "recommend", "show", "list", "give",
+        "need", "want", "looking for", "search", "get me",
+    ]
+    if any(word in prompt_lower for word in action_words):
+        return None
+
     # Don't clarify if this IS a clarification response (user already refined)
     # Clarification responses tend to be descriptive phrases starting with
     # "equipment", "cards that trigger", "free sacrifice", etc.
@@ -113,9 +121,18 @@ def check_for_effect_clarification(prompt: str) -> dict | None:
         "equipment", "auras that", "spells that", "creatures that trigger",
         "cards that trigger", "free sacrifice", "token generator",
         "cards that return", "cards that put", "all cards that",
-        "all ", "directly", "repeatedly",
+        "all ", "directly", "repeatedly", "grant ", "place ",
     ]
     if any(prompt_lower.startswith(indicator) for indicator in clarification_indicators):
+        return None
+
+    # Also skip if the prompt matches any known clarification option label or description
+    all_option_texts = set()
+    for config in SYNERGY_MECHANICS.values():
+        for opt in config["options"]:
+            all_option_texts.add(opt["label"].lower())
+            all_option_texts.add(opt["description"].lower())
+    if prompt_lower in all_option_texts:
         return None
 
     # ── Check for keyword ability grant/need patterns ────────

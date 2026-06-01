@@ -66,6 +66,19 @@ Rules:
     max_results = plan.get("max_results", 10)
     user_msg = f"User request: {prompt}\n\n"
 
+    # If oracle filters or constraints were detected, inform the AI
+    oracle_filters = plan.get("oracle_filters", [])
+    det_constraints = plan.get("_det_constraints", {})
+    constraint_parts = []
+    if oracle_filters:
+        constraint_parts.append(f"STRONGLY PREFER cards whose oracle text mentions: {', '.join(oracle_filters)}. Only suggest cards without these terms if fewer than 3 matching options exist.")
+    if det_constraints.get("max_cmc"):
+        constraint_parts.append(f"All cards MUST cost {det_constraints['max_cmc']} mana or less.")
+    if det_constraints.get("max_price"):
+        constraint_parts.append(f"All cards MUST cost ${det_constraints['max_price']:.2f} or less.")
+    if constraint_parts:
+        user_msg += "CONSTRAINTS:\n" + "\n".join(constraint_parts) + "\n\n"
+
     if deck_summary:
         user_msg += f"Deck summary:\n{deck_summary}\n\n"
 
@@ -320,11 +333,18 @@ Rules:
     max_results = plan.get("max_results", 10)
     user_msg = f"User request: {prompt}\n\n"
 
-    # If specific mechanical requirements were detected, tell the AI
-    requirements = plan.get("_requirements", [])
-    if requirements:
-        user_msg += f"CRITICAL REQUIREMENT: The user is asking specifically for cards that mention: {', '.join(requirements)}.\n"
-        user_msg += "STRONGLY PREFER cards whose oracle text contains these terms. Only suggest cards WITHOUT these terms if fewer than 3 matching cards are available.\n\n"
+    # If oracle filters or constraints were detected, inform the AI
+    oracle_filters = plan.get("oracle_filters", [])
+    det_constraints = plan.get("_det_constraints", {})
+    constraint_parts = []
+    if oracle_filters:
+        constraint_parts.append(f"STRONGLY PREFER cards whose oracle text mentions: {', '.join(oracle_filters)}. Only suggest cards without these terms if fewer than 3 matching options exist.")
+    if det_constraints.get("max_cmc"):
+        constraint_parts.append(f"All cards MUST cost {det_constraints['max_cmc']} mana or less.")
+    if det_constraints.get("max_price"):
+        constraint_parts.append(f"All cards MUST cost ${det_constraints['max_price']:.2f} or less.")
+    if constraint_parts:
+        user_msg += "CONSTRAINTS:\n" + "\n".join(constraint_parts) + "\n\n"
 
     if deck_summary:
         user_msg += f"Deck summary:\n{deck_summary}\n\n"

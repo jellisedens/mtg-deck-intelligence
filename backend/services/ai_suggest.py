@@ -17,6 +17,8 @@ from services.edhrec import fetch_commander_profile, format_edhrec_context_for_p
 from services.analytics import compute_analytics
 from services.role_classifier import classify_deck_roles
 from services.deck_context import build_deck_context
+from services.effect_clarifier import check_for_effect_clarification
+from services.prompt_constraints import extract_deterministic_constraints, apply_deterministic_constraints, apply_oracle_filters
 from services.intent_router import classify_intent, INTENT_SUGGEST, INTENT_CUTS, INTENT_ANALYZE, INTENT_SWAP
 from services.prompt_builders import (
     build_suggest_prompt, build_cuts_prompt,
@@ -70,69 +72,6 @@ def _filter_by_color_identity(results: list, deck_color_identity: list) -> list:
         print(f"[AI] Color identity filter removed {removed} illegal cards")
     return filtered
 
-def _extract_prompt_requirements(prompt: str) -> list[str]:
-    """
-    Extract specific mechanical requirements from the user's prompt.
-    Detects when the user wants a specific effect (trample, lifelink, etc.)
-    vs a general category (ramp, removal, card draw).
-    Returns oracle text terms that results should contain.
-    """
-    prompt_lower = prompt.lower()
-    requirements = []
-
-    effect_patterns = [
-        r'\b(?:give|gives|grant|grants|have|has|with|gain|gains)\s+([\w\s]+?)(?:\s+to|\s+for|\s*$|\s*,)',
-        r'\bcards?\s+(?:that|which)\s+(?:give|grant|provide|add)\s+([\w\s]+?)(?:\s+to|\s*$|\s*,)',
-        r'\b(?:need|want|looking for)\s+([\w\s]+?)\s+(?:cards?|spells?|equipment|auras?)',
-    ]
-
-    noise = {"some", "more", "good", "best", "cheap", "budget", "new", "cards",
-             "card", "my", "the", "a", "that", "can", "commander", "creatures"}
-
-    for pattern in effect_patterns:
-        matches = re.findall(pattern, prompt_lower)
-        for match in matches:
-            term = match.strip()
-            words = [w for w in term.split() if w not in noise]
-            if words:
-                cleaned = " ".join(words)
-                if len(cleaned) >= 3:
-                    requirements.append(cleaned)
-
-    return requirements
-
-
-def _prioritize_by_relevance(results: list, requirements: list) -> list:
-    """
-    When the user asked for a specific effect, prioritize cards that
-    actually mention it in their oracle text. Non-matching cards are
-    capped to prevent them from drowning out relevant results.
-    """
-    if not requirements:
-        return results
-
-    matching = []
-    non_matching = []
-
-    for card in results:
-        oracle = (card.get("oracle_text", "") or "").lower()
-        type_line = (card.get("type_line", "") or "").lower()
-        keywords = " ".join(card.get("keywords", [])).lower()
-        card_text = oracle + " " + type_line + " " + keywords
-
-        if any(req in card_text for req in requirements):
-            matching.append(card)
-        else:
-            non_matching.append(card)
-
-    if matching:
-        print(f"[AI] Relevance filter: {len(matching)} match {requirements}, {len(non_matching)} don't")
-        # Cap non-matching cards — only include a few as fallback
-        max_fallback = max(3, len(matching) // 3)
-        non_matching = non_matching[:max_fallback]
-        print(f"[AI] Capped non-matching to {len(non_matching)} fallback cards")
-
-    return matching + non_matching
 
 def _extract_requested_count(prompt: str) -> int | None:
     """Extract explicit count from prompt like 'suggest 10 cards' or 'show me all'."""
@@ -234,72 +173,6 @@ def _build_representative_sample(all_results: list, queries: list, max_cards: in
     
     return top_results
 
-def _apply_playbook_filter(results: list, prompt: str, deck_info: dict) -> list:
-    """Filter results based on playbook avoid guidance for the matched category."""
-    if not deck_info:
-        return results
-    
-    playbook = (deck_info.get("strategy_profile") or {}).get("archetype_playbook", {})
-    if not playbook:
-        return results
-    
-    # Determine which category this prompt maps to
-    prompt_lower = prompt.lower()
-    category_keywords = {
-        "ramp": ["ramp", "mana", "accelerat"],
-        "card_draw": ["draw", "card advantage", "card draw"],
-        "removal": ["removal", "remove", "destroy", "exile", "kill"],
-        "protection": ["protect", "hexproof", "indestructible", "counter"],
-    }
-    
-    matched_category = None
-    for cat, keywords in category_keywords.items():
-        if any(kw in prompt_lower for kw in keywords):
-            matched_category = cat
-            break
-    
-    if not matched_category:
-        return results
-    
-    guidance = playbook.get("category_guidance", {}).get(matched_category, {})
-    avoid_text = guidance.get("avoid", "").lower()
-    
-    if not avoid_text:
-        return results
-    
-    # Parse avoid text for type-based filtering
-    avoid_types = set()
-    if "creature" in avoid_text and ("creature-based" in avoid_text or "creature" in avoid_text):
-        avoid_types.add("Creature")
-    if "enchantment" in avoid_text and ("enchantment-based" in avoid_text or "enchantment" in avoid_text):
-        avoid_types.add("Enchantment")
-    if "sorcery" in avoid_text:
-        avoid_types.add("Sorcery")
-    if "instant" in avoid_text:
-        avoid_types.add("Instant")
-    if "artifact" in avoid_text:
-        avoid_types.add("Artifact")
-    
-    if not avoid_types:
-        return results
-    
-    # Filter but keep at least half the results (don't over-filter)
-    filtered = []
-    removed = []
-    for card in results:
-        type_line = card.get("type_line", "")
-        should_remove = any(t in type_line for t in avoid_types)
-        if should_remove:
-            removed.append(card)
-        else:
-            filtered.append(card)
-    
-    # If filtering removed too many, add some back
-    min_results = max(len(results) // 2, 8)
-    if len(filtered) < min_results:
-        filtered.extend(removed[:min_results - len(filtered)])
-    
-    return filtered
 
 def _apply_playbook_filter(results: list, prompt: str, deck_info: dict) -> list:
     """Filter results based on playbook avoid guidance for the matched category."""
@@ -391,6 +264,12 @@ async def get_suggestions(prompt: str, deck_cards: list = None, deck_info: dict 
         clarification = _check_for_clarification(prompt)
         if clarification:
             return clarification
+        # Check for effect-specific clarification
+        effect_clarification = check_for_effect_clarification(prompt)
+        if effect_clarification:
+            return effect_clarification
+        
+
 
     # Classify intent
     intent_result = classify_intent(prompt, has_deck=deck_cards is not None)
@@ -617,10 +496,15 @@ async def _handle_suggest(prompt: str, deck_cards: list, deck_info: dict,
     deck_ci = _get_deck_color_identity(deck_info, deck_cards, card_lookup)
     search_results = _filter_by_color_identity(search_results, deck_ci)
 
-    # Relevance filter — prioritize cards matching specific effect requests
-    requirements = _extract_prompt_requirements(prompt)
-    if requirements:
-        search_results = _prioritize_by_relevance(search_results, requirements)
+    # Deterministic constraints — CMC and price limits from prompt
+    det_constraints = extract_deterministic_constraints(prompt)
+    search_results = apply_deterministic_constraints(search_results, det_constraints)
+
+    # AI-generated oracle filters — semantic constraints from the planner
+    oracle_filters = plan.get("oracle_filters", [])
+    filter_mode = plan.get("filter_mode", "any")
+    if oracle_filters:
+        search_results = apply_oracle_filters(search_results, oracle_filters, filter_mode)
 
     # Build focused prompt — scale results to requested count
     # Default to 5 unless user explicitly asked for more
@@ -649,15 +533,17 @@ async def _handle_suggest(prompt: str, deck_cards: list, deck_info: dict,
             "edhrec_rank": card.get("edhrec_rank"),
         })
 
+
+    # Pass constraints to prompt builder
+    if det_constraints:
+        plan["_det_constraints"] = det_constraints
+
     # Inject EDHREC context for prompt builder
     if edhrec_profile and deck_info:
         deck_info["_edhrec_context"] = format_edhrec_context_for_prompt(
             edhrec_profile, list(existing_cards), max_cards=15
         )
 
-    # Inject specific requirements into the plan so the prompt builder can use them
-    if requirements:
-        plan["_requirements"] = requirements
         
     system, user_msg = build_suggest_prompt(
         prompt=prompt,
@@ -1286,8 +1172,20 @@ Respond with ONLY valid JSON:
     "mode": "search",
     "reasoning": "brief explanation of your search strategy",
     "scryfall_queries": ["query1", "query2", "query3"],
+    "oracle_filters": [],
+    "filter_mode": "any",
     "max_results": 10
 }}
+
+oracle_filters: oracle text terms that results SHOULD contain to match the user's intent.
+Cards whose oracle text doesn't match will be deprioritized. Examples:
+- "Equipment that grants trample" → oracle_filters: ["gains trample", "has trample", "gets trample", "and trample", "equipped creature"]
+- "Cards that benefit from lifegain" → oracle_filters: ["whenever you gain life", "life you gained", "you gain life"]
+- "Cards that make creatures bigger" → oracle_filters: ["+1/+1", "gets +", "counter on"]
+- "Sacrifice outlets" → oracle_filters: ["sacrifice a creature", "sacrifice another"]
+- "Suggest ramp" (general category) → oracle_filters: [] (empty — no filtering needed)
+Only include oracle_filters when the user wants a SPECIFIC mechanical effect. Leave empty for broad requests.
+filter_mode: "any" means matching ANY term is sufficient. "all" means ALL terms must appear.
 
 {SCRYFALL_SYNTAX_GUIDE}
 

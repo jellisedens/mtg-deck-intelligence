@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, FormEvent } from "react";
-import { createDeck, autocompleteCards, searchCards, addCard, updateDeckPreferences } from "@/lib/api";
+import { createDeck, autocompleteCards, searchCards, addCard, updateDeckPreferences, getToken } from "@/lib/api";
 import { Deck, ScryfallCard } from "@/lib/types";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8001";
@@ -18,19 +18,30 @@ const FORMATS = [
 
 const POWER_LEVELS = [
   { value: "", label: "not set" },
-  { value: "casual", label: "casual — fun first" },
-  { value: "focused", label: "focused — has a plan" },
-  { value: "optimized", label: "optimized — tuned and efficient" },
-  { value: "cedh", label: "cEDH — competitive" },
+  { value: "casual", label: "casual — fun first, no pubstomping" },
+  { value: "focused", label: "focused — has a plan, not fully optimized" },
+  { value: "optimized", label: "optimized — tuned, efficient, strong" },
+  { value: "cedh", label: "cEDH — competitive, fast combos, no holds barred" },
 ];
 
-const SHELL_MESSAGES = [
+const SHELL_MESSAGES_STARTER = [
   "fetching EDHREC data...",
   "analyzing commander synergies...",
   "building mana base...",
   "selecting staples...",
   "assembling your deck...",
 ];
+
+const SHELL_MESSAGES_AVERAGE = [
+  "fetching EDHREC data...",
+  "analyzing community decklists...",
+  "selecting most popular cards...",
+  "building optimized mana base...",
+  "adding utility lands...",
+  "assembling full decklist...",
+];
+
+type GenerateMode = "none" | "starter" | "average";
 
 interface Props {
   onClose: () => void;
@@ -56,16 +67,20 @@ export default function CreateDeckModal({ onClose, onCreated }: Props) {
   // Step 3: Preferences
   const [powerLevel, setPowerLevel] = useState("");
   const [strategyNotes, setStrategyNotes] = useState("");
+  const [colorPreferences, setColorPreferences] = useState("");
+  const [cardTypePreferences, setCardTypePreferences] = useState("");
   const [budget, setBudget] = useState("");
+  const [otherNotes, setOtherNotes] = useState("");
+  const [generateMode, setGenerateMode] = useState<GenerateMode>("starter");
 
   // Step 4: Generating
-  const [generateShell, setGenerateShell] = useState(true);
   const [shellProgress, setShellProgress] = useState(0);
-  const [shellMessage, setShellMessage] = useState(SHELL_MESSAGES[0]);
+  const [shellMessage, setShellMessage] = useState("");
   const [shellResult, setShellResult] = useState<{
     cards_added: number;
     total_deck_size: number;
     edhrec_decks_analyzed: number;
+    mode: string;
   } | null>(null);
 
   // Shared
@@ -75,15 +90,17 @@ export default function CreateDeckModal({ onClose, onCreated }: Props) {
   // Animate shell progress messages
   useEffect(() => {
     if (step !== "generating") return;
+    const messages = generateMode === "average" ? SHELL_MESSAGES_AVERAGE : SHELL_MESSAGES_STARTER;
+    setShellMessage(messages[0]);
     const interval = setInterval(() => {
       setShellProgress((prev) => {
-        const next = Math.min(prev + 1, SHELL_MESSAGES.length - 1);
-        setShellMessage(SHELL_MESSAGES[next]);
+        const next = Math.min(prev + 1, messages.length - 1);
+        setShellMessage(messages[next]);
         return next;
       });
     }, 2500);
     return () => clearInterval(interval);
-  }, [step]);
+  }, [step, generateMode]);
 
   // Commander autocomplete
   useEffect(() => {
@@ -140,7 +157,7 @@ export default function CreateDeckModal({ onClose, onCreated }: Props) {
     if (format === "commander") {
       setStep("commander");
     } else {
-      await createAndFinish(false);
+      await createAndFinish();
     }
   }
 
@@ -155,20 +172,18 @@ export default function CreateDeckModal({ onClose, onCreated }: Props) {
 
   async function handlePreferencesSubmit() {
     setError("");
-    await createAndFinish(generateShell);
+    await createAndFinish();
   }
 
-  async function createAndFinish(shouldGenerateShell: boolean) {
+  async function createAndFinish() {
     setLoading(true);
     try {
-      // Create the deck
       const deck = await createDeck({
         name: name.trim(),
         format,
         description: description.trim() || undefined,
       });
 
-      // If commander format, add the commander card
       if (format === "commander" && selectedCommander) {
         await addCard(deck.id, {
           scryfall_id: selectedCommander.id,
@@ -178,29 +193,33 @@ export default function CreateDeckModal({ onClose, onCreated }: Props) {
         });
       }
 
-      // Save preferences if any were set
-      if (powerLevel || strategyNotes || budget) {
+      // Save all preferences
+      const hasPreferences = powerLevel || strategyNotes || colorPreferences || cardTypePreferences || budget || otherNotes;
+      if (hasPreferences) {
         await updateDeckPreferences(deck.id, {
           power_level: powerLevel || null,
           strategy_notes: strategyNotes || null,
+          color_preferences: colorPreferences || null,
+          card_type_preferences: cardTypePreferences || null,
           budget: budget || null,
+          other_notes: otherNotes || null,
         });
       }
 
-      // Generate starter shell if requested
-      if (shouldGenerateShell && format === "commander" && selectedCommander) {
+      // Generate shell if requested
+      if (generateMode !== "none" && format === "commander" && selectedCommander) {
         setStep("generating");
         setShellProgress(0);
-        setShellMessage(SHELL_MESSAGES[0]);
 
         try {
-          const token = localStorage.getItem("mtg_token");
+          const token = getToken();
           const res = await fetch(`${API_URL}/decks/${deck.id}/wizard/generate-shell`, {
             method: "POST",
             headers: {
               Authorization: `Bearer ${token}`,
               "Content-Type": "application/json",
             },
+            body: JSON.stringify({ mode: generateMode }),
           });
 
           if (res.ok) {
@@ -209,12 +228,10 @@ export default function CreateDeckModal({ onClose, onCreated }: Props) {
               cards_added: result.cards_added,
               total_deck_size: result.total_deck_size,
               edhrec_decks_analyzed: result.edhrec_decks_analyzed,
+              mode: result.mode,
             });
-
-            // Brief pause to show the result before redirecting
             await new Promise((r) => setTimeout(r, 1500));
           } else {
-            // Shell generation failed — still redirect, deck was created
             console.error("Shell generation failed:", await res.text());
           }
         } catch (err) {
@@ -225,7 +242,7 @@ export default function CreateDeckModal({ onClose, onCreated }: Props) {
       onCreated(deck);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Failed to create deck");
-      setStep("preferences"); // Go back so user can retry
+      setStep("preferences");
     } finally {
       setLoading(false);
     }
@@ -236,8 +253,11 @@ export default function CreateDeckModal({ onClose, onCreated }: Props) {
   }
 
   function handleSkipPreferences() {
-    createAndFinish(false);
+    setGenerateMode("none");
+    createAndFinish();
   }
+
+  const shellMessages = generateMode === "average" ? SHELL_MESSAGES_AVERAGE : SHELL_MESSAGES_STARTER;
 
   return (
     <div
@@ -245,7 +265,7 @@ export default function CreateDeckModal({ onClose, onCreated }: Props) {
       onClick={step === "generating" ? undefined : onClose}
     >
       <div
-        className="panel p-6 w-full max-w-md mx-4"
+        className="panel p-6 w-full max-w-md mx-4 max-h-[90vh] overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between mb-4">
@@ -417,7 +437,7 @@ export default function CreateDeckModal({ onClose, onCreated }: Props) {
         {step === "preferences" && (
           <div className="space-y-4">
             <p className="text-xs text-text-secondary">
-              Optional — helps the AI give better suggestions.
+              All optional — helps the AI give better suggestions.
             </p>
 
             <div>
@@ -435,43 +455,123 @@ export default function CreateDeckModal({ onClose, onCreated }: Props) {
 
             <div>
               <label className="block text-xs text-text-secondary mb-1.5">
-                strategy notes <span className="text-text-muted">(what's the game plan?)</span>
+                strategy / theme
               </label>
               <textarea
                 value={strategyNotes}
                 onChange={(e) => setStrategyNotes(e.target.value)}
-                className="input-terminal min-h-[60px] resize-y"
-                placeholder="Ramp into big creatures, use commander for card draw..."
+                className="input-terminal min-h-[50px] resize-y"
+                placeholder="Ramp into big creatures, life drain theme..."
               />
             </div>
 
             <div>
               <label className="block text-xs text-text-secondary mb-1.5">
-                budget <span className="text-text-muted">(optional)</span>
+                color preferences
+              </label>
+              <input
+                type="text"
+                value={colorPreferences}
+                onChange={(e) => setColorPreferences(e.target.value)}
+                className="input-terminal"
+                placeholder="Heavy black, splash green for ramp..."
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs text-text-secondary mb-1.5">
+                card type preferences
+              </label>
+              <input
+                type="text"
+                value={cardTypePreferences}
+                onChange={(e) => setCardTypePreferences(e.target.value)}
+                className="input-terminal"
+                placeholder="Creature-heavy, minimal enchantments..."
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs text-text-secondary mb-1.5">
+                budget
               </label>
               <input
                 type="text"
                 value={budget}
                 onChange={(e) => setBudget(e.target.value)}
                 className="input-terminal"
-                placeholder="$50, no limit, etc."
+                placeholder="$50, no limit, no cards over $10, etc."
               />
             </div>
 
-            {/* Auto-generate toggle */}
+            <div>
+              <label className="block text-xs text-text-secondary mb-1.5">
+                other notes
+              </label>
+              <input
+                type="text"
+                value={otherNotes}
+                onChange={(e) => setOtherNotes(e.target.value)}
+                className="input-terminal"
+                placeholder="No infinite combos, playgroup has lots of flyers..."
+              />
+            </div>
+
+            {/* Generation mode selector */}
             {format === "commander" && selectedCommander && (
-              <div className="flex items-center gap-3 p-3 bg-bg-primary rounded border border-border">
-                <input
-                  type="checkbox"
-                  id="generate-shell"
-                  checked={generateShell}
-                  onChange={(e) => setGenerateShell(e.target.checked)}
-                  className="accent-accent-green"
-                />
-                <label htmlFor="generate-shell" className="text-xs text-text-secondary cursor-pointer">
-                  <span className="text-text-primary font-medium">Auto-generate starter deck</span>
-                  <br />
-                  Adds ~60 cards based on EDHREC community data. You can edit everything after.
+              <div className="space-y-2 pt-1">
+                <label className="block text-xs text-text-secondary mb-1">deck generation</label>
+
+                <label className="flex items-start gap-3 p-3 bg-bg-primary rounded border border-border cursor-pointer hover:border-text-muted transition-colors">
+                  <input
+                    type="radio"
+                    name="generate-mode"
+                    checked={generateMode === "average"}
+                    onChange={() => setGenerateMode("average")}
+                    className="mt-0.5 accent-accent-green"
+                  />
+                  <div className="text-xs">
+                    <span className="text-text-primary font-medium">Generate average {selectedCommander.name} deck</span>
+                    <br />
+                    <span className="text-text-muted">
+                      Builds a complete 99-card deck based on EDHREC community data.
+                      The most popular cards across thousands of decks.
+                    </span>
+                  </div>
+                </label>
+
+                <label className="flex items-start gap-3 p-3 bg-bg-primary rounded border border-border cursor-pointer hover:border-text-muted transition-colors">
+                  <input
+                    type="radio"
+                    name="generate-mode"
+                    checked={generateMode === "starter"}
+                    onChange={() => setGenerateMode("starter")}
+                    className="mt-0.5 accent-accent-green"
+                  />
+                  <div className="text-xs">
+                    <span className="text-text-primary font-medium">Generate starter shell</span>
+                    <br />
+                    <span className="text-text-muted">
+                      Adds ~25 staples + lands. Leaves room for you to customize.
+                    </span>
+                  </div>
+                </label>
+
+                <label className="flex items-start gap-3 p-3 bg-bg-primary rounded border border-border cursor-pointer hover:border-text-muted transition-colors">
+                  <input
+                    type="radio"
+                    name="generate-mode"
+                    checked={generateMode === "none"}
+                    onChange={() => setGenerateMode("none")}
+                    className="mt-0.5 accent-accent-green"
+                  />
+                  <div className="text-xs">
+                    <span className="text-text-primary font-medium">Empty deck</span>
+                    <br />
+                    <span className="text-text-muted">
+                      Just the commander. Build from scratch.
+                    </span>
+                  </div>
                 </label>
               </div>
             )}
@@ -486,7 +586,9 @@ export default function CreateDeckModal({ onClose, onCreated }: Props) {
               >
                 {loading ? (
                   <span>creating<span className="animate-pulse">...</span></span>
-                ) : generateShell && format === "commander" && selectedCommander ? (
+                ) : generateMode === "average" ? (
+                  `generate ${selectedCommander?.name?.split(",")[0] || ""} deck →`
+                ) : generateMode === "starter" ? (
                   "create & build →"
                 ) : (
                   "create deck →"
@@ -509,16 +611,18 @@ export default function CreateDeckModal({ onClose, onCreated }: Props) {
                     </svg>
                   </div>
                   <p className="text-sm text-text-primary font-medium mb-2">
-                    Building your {selectedCommander?.name} deck
+                    {generateMode === "average"
+                      ? `Building average ${selectedCommander?.name} deck`
+                      : `Building your ${selectedCommander?.name} deck`
+                    }
                   </p>
                   <p className="text-xs text-text-muted animate-pulse">
                     {shellMessage}
                   </p>
-                  {/* Progress bar */}
                   <div className="mt-4 mx-8 h-1 bg-bg-tertiary rounded-full overflow-hidden">
                     <div
                       className="h-full bg-accent-green rounded-full transition-all duration-1000 ease-out"
-                      style={{ width: `${((shellProgress + 1) / SHELL_MESSAGES.length) * 100}%` }}
+                      style={{ width: `${((shellProgress + 1) / shellMessages.length) * 100}%` }}
                     />
                   </div>
                 </>
@@ -530,13 +634,14 @@ export default function CreateDeckModal({ onClose, onCreated }: Props) {
                     </svg>
                   </div>
                   <p className="text-sm text-text-primary font-medium mb-1">
-                    Deck ready!
+                    {shellResult.mode === "average" ? "Average deck built!" : "Deck ready!"}
                   </p>
                   <p className="text-xs text-text-muted">
                     {shellResult.cards_added} cards added from {shellResult.edhrec_decks_analyzed.toLocaleString()} community decks
                   </p>
                   <p className="text-xs text-text-muted mt-1">
-                    {shellResult.total_deck_size}/100 cards — use the AI panel to fill the rest
+                    {shellResult.total_deck_size}/100 cards
+                    {shellResult.total_deck_size < 100 && " — use the AI panel to fill the rest"}
                   </p>
                 </>
               )}

@@ -1,10 +1,16 @@
 """
 Deck Wizard - auto-generates a starter shell for new Commander decks.
+
+Modes:
+- starter: ~25 top EDHREC spells + 37 lands (quick start, room to customize)
+- average: ~62 EDHREC spells + 37 lands (full average community deck)
 """
 
 import asyncio
 from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
+from typing import Optional
 from sqlalchemy.orm import Session
 
 from database.session import get_db
@@ -45,6 +51,10 @@ COLORLESS_UTILITY_LANDS = [
 ]
 
 
+class GenerateShellRequest(BaseModel):
+    mode: str = "starter"  # "starter" or "average"
+
+
 def _build_mana_base(color_identity, total_lands=37):
     """Generate a balanced mana base for a Commander deck."""
     colors = [c for c in "WUBRG" if c in color_identity]
@@ -83,7 +93,7 @@ def _build_mana_base(color_identity, total_lands=37):
     return lands
 
 
-def _select_edhrec_cards(profile, color_identity, max_cards=28, budget=None):
+def _select_edhrec_cards(profile, color_identity, max_cards=28):
     """Select the best cards from EDHREC data for a starter shell."""
     cards = profile.get("cards", [])
     non_land_cards = [
@@ -99,13 +109,33 @@ def _select_edhrec_cards(profile, color_identity, max_cards=28, budget=None):
     return selected
 
 
+def _select_edhrec_lands(profile, existing_names, max_lands=10):
+    """Select popular utility lands from EDHREC data."""
+    cards = profile.get("cards", [])
+    land_cards = [
+        c for c in cards
+        if c.get("category") in ("land", "utility_land")
+        and c["name"].lower() not in existing_names
+        and c["inclusion_pct"] >= 15
+    ]
+    land_cards.sort(key=lambda c: c["inclusion_pct"], reverse=True)
+    return land_cards[:max_lands]
+
+
 @router.post("/{deck_id}/wizard/generate-shell")
 async def generate_deck_shell(
     deck_id: UUID,
+    request: GenerateShellRequest = GenerateShellRequest(),
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Auto-generate a starter shell for a Commander deck."""
+    """
+    Auto-generate a starter shell for a Commander deck.
+
+    Modes:
+    - starter: ~25 EDHREC spells + 37 basic lands (quick start)
+    - average: ~62 EDHREC spells + 37 lands including EDHREC utility lands (full average deck)
+    """
     deck = db.query(Deck).filter(Deck.id == deck_id).first()
     if not deck:
         raise HTTPException(status_code=404, detail="Deck not found")
@@ -113,6 +143,10 @@ async def generate_deck_shell(
         raise HTTPException(status_code=403, detail="Not your deck")
     if deck.format != "commander":
         raise HTTPException(status_code=400, detail="Shell generation is only for Commander")
+
+    mode = request.mode
+    if mode not in ("starter", "average"):
+        raise HTTPException(status_code=400, detail="Mode must be 'starter' or 'average'")
 
     commander = db.query(DeckCard).filter(
         DeckCard.deck_id == deck.id,
@@ -148,19 +182,28 @@ async def generate_deck_shell(
             cards_to_add.append(card_name)
             existing_names.add(card_name.lower())
 
-    # EDHREC staples
+    # Determine how many spells to pull based on mode
     land_slots = 37
-    if edhrec_profile:
-        spell_slots = slots_available - land_slots - len(cards_to_add)
+    if mode == "average":
+        # Fill as much as possible: 99 - 1 commander - 37 lands = 61 spell slots
+        spell_slots = min(slots_available - land_slots - len(cards_to_add), 62)
         spell_slots = max(spell_slots, 15)
+    else:
+        # Starter: ~25 spells, leave room for user customization
+        spell_slots = min(slots_available - land_slots - len(cards_to_add), 25)
+        spell_slots = max(spell_slots, 15)
+
+    # EDHREC staples
+    if edhrec_profile:
         edhrec_picks = _select_edhrec_cards(
             edhrec_profile, color_identity,
-            max_cards=spell_slots, budget=budget,
+            max_cards=spell_slots,
         )
         for pick in edhrec_picks:
             if pick["name"].lower() not in existing_names:
                 cards_to_add.append(pick["name"])
                 existing_names.add(pick["name"].lower())
+        print(f"[Wizard] Mode={mode}: selected {len(edhrec_picks)} EDHREC spells")
 
     # Mana base
     land_names = _build_mana_base(color_identity, total_lands=land_slots)
@@ -170,6 +213,28 @@ async def generate_deck_shell(
         if land.lower() in existing_names and land not in basic_names:
             continue
         land_counts[land] = land_counts.get(land, 0) + 1
+
+    # In average mode, also pull EDHREC-recommended utility lands
+    edhrec_lands_added = 0
+    if mode == "average" and edhrec_profile:
+        edhrec_lands = _select_edhrec_lands(edhrec_profile, existing_names, max_lands=8)
+        # Replace some basics with EDHREC utility lands
+        basics_to_remove = min(len(edhrec_lands), sum(v for k, v in land_counts.items() if k in basic_names) // 2)
+        removed = 0
+        for basic in list(basic_names):
+            if removed >= basics_to_remove:
+                break
+            if basic in land_counts and land_counts[basic] > 2:
+                can_remove = min(land_counts[basic] - 2, basics_to_remove - removed)
+                land_counts[basic] -= can_remove
+                removed += can_remove
+
+        for eland in edhrec_lands[:basics_to_remove]:
+            if eland["name"].lower() not in existing_names:
+                land_counts[eland["name"]] = 1
+                existing_names.add(eland["name"].lower())
+                edhrec_lands_added += 1
+        print(f"[Wizard] Added {edhrec_lands_added} EDHREC utility lands")
 
     # Resolve non-land cards via Scryfall
     total_resolved = 0
@@ -242,6 +307,7 @@ async def generate_deck_shell(
 
     return {
         "status": "ok",
+        "mode": mode,
         "commander": commander.card_name,
         "color_identity": color_identity,
         "cards_added": len(added_cards),

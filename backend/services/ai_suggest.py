@@ -70,6 +70,66 @@ def _filter_by_color_identity(results: list, deck_color_identity: list) -> list:
         print(f"[AI] Color identity filter removed {removed} illegal cards")
     return filtered
 
+def _extract_prompt_requirements(prompt: str) -> list[str]:
+    """
+    Extract specific mechanical requirements from the user's prompt.
+    Detects when the user wants a specific effect (trample, lifelink, etc.)
+    vs a general category (ramp, removal, card draw).
+    Returns oracle text terms that results should contain.
+    """
+    prompt_lower = prompt.lower()
+    requirements = []
+
+    effect_patterns = [
+        r'\b(?:give|gives|grant|grants|have|has|with|gain|gains)\s+([\w\s]+?)(?:\s+to|\s+for|\s*$|\s*,)',
+        r'\bcards?\s+(?:that|which)\s+(?:give|grant|provide|add)\s+([\w\s]+?)(?:\s+to|\s*$|\s*,)',
+        r'\b(?:need|want|looking for)\s+([\w\s]+?)\s+(?:cards?|spells?|equipment|auras?)',
+    ]
+
+    noise = {"some", "more", "good", "best", "cheap", "budget", "new", "cards",
+             "card", "my", "the", "a", "that", "can", "commander", "creatures"}
+
+    for pattern in effect_patterns:
+        matches = re.findall(pattern, prompt_lower)
+        for match in matches:
+            term = match.strip()
+            words = [w for w in term.split() if w not in noise]
+            if words:
+                cleaned = " ".join(words)
+                if len(cleaned) >= 3:
+                    requirements.append(cleaned)
+
+    return requirements
+
+
+def _prioritize_by_relevance(results: list, requirements: list) -> list:
+    """
+    When the user asked for a specific effect, prioritize cards that
+    actually mention it in their oracle text. Non-matching cards get
+    pushed to the back, not removed.
+    """
+    if not requirements:
+        return results
+
+    matching = []
+    non_matching = []
+
+    for card in results:
+        oracle = (card.get("oracle_text", "") or "").lower()
+        type_line = (card.get("type_line", "") or "").lower()
+        keywords = " ".join(card.get("keywords", [])).lower()
+        card_text = oracle + " " + type_line + " " + keywords
+
+        if any(req in card_text for req in requirements):
+            matching.append(card)
+        else:
+            non_matching.append(card)
+
+    if matching:
+        print(f"[AI] Relevance filter: {len(matching)} match {requirements}, {len(non_matching)} don't")
+
+    return matching + non_matching
+
 def _extract_requested_count(prompt: str) -> int | None:
     """Extract explicit count from prompt like 'suggest 10 cards' or 'show me all'."""
     prompt_lower = prompt.lower()
@@ -552,6 +612,11 @@ async def _handle_suggest(prompt: str, deck_cards: list, deck_info: dict,
     # Hard color identity filter — catch anything that slipped through
     deck_ci = _get_deck_color_identity(deck_info, deck_cards, card_lookup)
     search_results = _filter_by_color_identity(search_results, deck_ci)
+
+    # Relevance filter — prioritize cards matching specific effect requests
+    requirements = _extract_prompt_requirements(prompt)
+    if requirements:
+        search_results = _prioritize_by_relevance(search_results, requirements)
 
     # Build focused prompt — scale results to requested count
     # Default to 5 unless user explicitly asked for more

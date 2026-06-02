@@ -18,8 +18,8 @@ from services.analytics import compute_analytics
 from services.role_classifier import classify_deck_roles
 from services.deck_context import build_deck_context
 from services.effect_clarifier import check_for_effect_clarification
-from services.prompt_constraints import extract_deterministic_constraints, apply_deterministic_constraints, apply_oracle_filters
-from services.intent_router import classify_intent, INTENT_SUGGEST, INTENT_CUTS, INTENT_ANALYZE, INTENT_SWAP
+from services.search_spec import generate_search_spec, apply_spec_filter
+from services.prompt_constraints import extract_deterministic_constraints, apply_deterministic_constraintsfrom services.intent_router import classify_intent, INTENT_SUGGEST, INTENT_CUTS, INTENT_ANALYZE, INTENT_SWAP
 from services.prompt_builders import (
     build_suggest_prompt, build_cuts_prompt,
     build_analyze_prompt, build_swap_prompt,
@@ -391,23 +391,40 @@ async def _handle_suggest(prompt: str, deck_cards: list, deck_info: dict,
     """Handle card suggestion requests."""
     t_plan = time.time()
 
-    # Try direct query bypass first (skips ~15s AI planning call)
+    # Try direct query bypass first (skips AI calls for simple requests)
     plan = _try_direct_queries(prompt, deck_info)
+    search_spec = None
 
     if plan:
         print(f"[AI] Direct bypass: {plan['reasoning']} ({time.time() - t_plan:.1f}s)")
         print(f"[AI] Queries: {plan.get('scryfall_queries', [])}")
-        deck_context = None  # Not needed — bypass skips AI planner
-    else:
-        # Build deck context (only needed for AI planner)
         deck_context = None
-        if deck_cards:
-            deck_context = build_deck_context(deck_cards, deck_info, analytics, card_lookup, role_data)
-        # Fall through to AI planner
-        plan = _get_ai_plan(prompt, deck_context, deck_info)
-        if "error" in plan:
-            return plan
-        print(f"[AI] Search plan via AI ({time.time() - t_plan:.1f}s)")
+    else:
+        # Generate structured search spec (replaces AI planner)
+        deck_ci = _get_deck_color_identity(deck_info, deck_cards, card_lookup)
+        deck_format = (deck_info or {}).get("format", "commander")
+        search_spec = generate_search_spec(prompt, color_identity=deck_ci, deck_format=deck_format)
+
+        if search_spec.get("error") or not search_spec.get("scryfall_queries"):
+            # Spec failed — fall back to AI planner
+            deck_context = None
+            if deck_cards:
+                deck_context = build_deck_context(deck_cards, deck_info, analytics, card_lookup, role_data)
+            plan = _get_ai_plan(prompt, deck_context, deck_info)
+            if "error" in plan:
+                return plan
+            print(f"[AI] Fallback to AI planner ({time.time() - t_plan:.1f}s)")
+        else:
+            # Use spec as the plan
+            plan = {
+                "scryfall_queries": search_spec["scryfall_queries"],
+                "max_results": search_spec.get("max_results", 8),
+                "reasoning": search_spec.get("intent_summary", ""),
+                "oracle_filters": search_spec.get("oracle_required", []),
+                "mode": "search",
+            }
+            deck_context = None
+
         print(f"[AI] Queries: {plan.get('scryfall_queries', [])}")
 
     # Execute searches
@@ -500,11 +517,9 @@ async def _handle_suggest(prompt: str, deck_cards: list, deck_info: dict,
     det_constraints = extract_deterministic_constraints(prompt)
     search_results = apply_deterministic_constraints(search_results, det_constraints)
 
-    # AI-generated oracle filters — semantic constraints from the planner
-    oracle_filters = plan.get("oracle_filters", [])
-    filter_mode = plan.get("filter_mode", "any")
-    if oracle_filters:
-        search_results = apply_oracle_filters(search_results, oracle_filters, filter_mode)
+    # Apply search spec filter (hard oracle enforcement) or fallback
+    if search_spec:
+        search_results = apply_spec_filter(search_results, search_spec)
 
     # Build focused prompt — scale results to requested count
     # Default to 5 unless user explicitly asked for more

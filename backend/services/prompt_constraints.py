@@ -3,9 +3,12 @@ Prompt Constraint System
 
 Two layers:
 1. Deterministic constraints (CMC, price) — extracted by regex, enforced by code
-2. Semantic constraints (oracle filters) — extracted by AI planner, enforced by code
+2. Oracle relevance scoring — extract terms from user's prompt, prioritize results that match
+3. AI oracle filters — from planner when available, applied as additional filter
 
-The AI understands what the user means. Code enforces it.
+The key insight: if the user says "trample", cards with "trample" in oracle text
+are more relevant than cards without it. No hardcoding needed — the user's own
+words become the relevance signal.
 """
 
 import re
@@ -97,48 +100,146 @@ def apply_deterministic_constraints(results: list, constraints: dict) -> list:
     return filtered
 
 
+def extract_prompt_oracle_terms(prompt: str) -> list[str]:
+    """
+    Extract terms from the user's prompt that are likely to appear in card oracle text.
+    These become relevance signals — cards containing these terms are prioritized.
+    
+    This is universal: no predefined keyword list. Instead, we filter out
+    common English filler and MTG meta-language, leaving the mechanical terms.
+    """
+    prompt_lower = prompt.lower().strip()
+    
+    # Words that are meta-language (about the game/request) not card text
+    meta_words = {
+        # Request language
+        "suggest", "find", "recommend", "show", "give", "list", "get",
+        "need", "want", "looking", "search", "cards", "card", "spells",
+        "spell", "some", "good", "best", "great", "strong", "powerful",
+        "any", "all", "types", "type", "options", "suggestions", "pieces",
+        # Pronouns/articles/prepositions
+        "i", "me", "my", "the", "a", "an", "for", "to", "of", "in",
+        "and", "or", "with", "that", "which", "this", "these", "those",
+        "can", "could", "would", "should", "will", "do", "does",
+        "are", "is", "it", "be", "have", "has", "not", "no",
+        # MTG meta-language (about the game, not on cards)
+        "deck", "commander", "creature", "creatures", "permanent", "permanents",
+        "mana", "cmc", "budget", "cheap", "expensive",
+        "equipment", "aura", "auras", "instant", "sorcery", "enchantment",
+        "artifact", "artifacts", "land", "lands",
+        # Intent words
+        "grant", "grants", "give", "gives", "make", "makes",
+        "provide", "provides", "benefit", "benefits", "interact",
+        "synergize", "synergy", "care", "cares", "about",
+        "use", "using", "trigger", "triggers",
+        # Common qualifiers
+        "under", "over", "less", "more", "than", "below", "above",
+        "also", "too", "very", "really", "just", "only",
+    }
+    
+    # Split and filter
+    words = prompt_lower.split()
+    meaningful = []
+    for word in words:
+        # Remove punctuation
+        clean = re.sub(r'[^\w+/-]', '', word)
+        if not clean or len(clean) < 3:
+            continue
+        if clean in meta_words:
+            continue
+        # Skip numbers (handled by CMC/price constraints)
+        if clean.isdigit():
+            continue
+        meaningful.append(clean)
+    
+    # Also extract multi-word phrases that commonly appear in oracle text
+    oracle_phrases = []
+    phrase_patterns = [
+        r"(can't be blocked)",
+        r"(deals? combat damage)",
+        r"(enter(?:s|ing)? the battlefield)",
+        r"(leaves? the battlefield)",
+        r"(\+1/\+1 counter)",
+        r"(-1/-1 counter)",
+        r"(gain(?:s)? life)",
+        r"(lose(?:s)? life)",
+        r"(draw(?:s)? a card)",
+        r"(search your library)",
+        r"(destroy(?:s)? target)",
+        r"(exile(?:s)? target)",
+        r"(sacrifice a creature)",
+        r"(double strike)",
+        r"(first strike)",
+    ]
+    for pattern in phrase_patterns:
+        if re.search(pattern, prompt_lower):
+            match = re.search(pattern, prompt_lower)
+            if match:
+                oracle_phrases.append(match.group(1))
+    
+    return meaningful + oracle_phrases
+
+
+def apply_oracle_relevance(results: list, prompt: str, ai_oracle_filters: list = None) -> list:
+    """
+    Prioritize search results by relevance to the user's prompt.
+    
+    Uses two sources:
+    1. AI-generated oracle_filters (when the planner provides them)
+    2. Terms extracted directly from the user's prompt
+    
+    Cards matching either source are prioritized. Cards matching neither
+    are pushed to the back. If enough matches exist, non-matching cards
+    are capped to prevent dilution.
+    """
+    # Combine AI filters with prompt-extracted terms
+    prompt_terms = extract_prompt_oracle_terms(prompt)
+    ai_terms = ai_oracle_filters or []
+    
+    # AI terms take priority (more precise), prompt terms as fallback
+    all_terms = list(set(ai_terms + prompt_terms))
+    
+    if not all_terms:
+        return results
+    
+    # Score each result by how many terms match its oracle text
+    scored = []
+    for card in results:
+        oracle = (card.get("oracle_text") or "").lower()
+        match_count = sum(1 for term in all_terms if term in oracle)
+        scored.append((card, match_count))
+    
+    # Split into matching and non-matching
+    matching = [(card, score) for card, score in scored if score > 0]
+    non_matching = [card for card, score in scored if score == 0]
+    
+    # Sort matching cards by match count (most relevant first), then by EDHREC rank
+    matching.sort(key=lambda x: (-x[1], x[0].get("edhrec_rank") or 999999))
+    matched_cards = [card for card, _ in matching]
+    
+    if matched_cards:
+        terms_used = [t for t in all_terms if any(t in (c.get("oracle_text") or "").lower() for c in matched_cards)]
+        print(f"[AI] Oracle relevance: {len(matched_cards)} match terms {terms_used[:5]}, {len(non_matching)} don't")
+        
+        # Cap non-matching based on how many matches we have
+        if len(matched_cards) >= 8:
+            return matched_cards
+        elif len(matched_cards) >= 5:
+            return matched_cards + non_matching[:max(1, len(matched_cards) // 5)]
+        elif len(matched_cards) >= 3:
+            return matched_cards + non_matching[:3]
+        else:
+            # Few matches — keep all but prioritize
+            return matched_cards + non_matching
+    
+    return results
+
+
 def apply_oracle_filters(results: list, oracle_filters: list, filter_mode: str = "any") -> list:
     """
     Apply AI-generated oracle text filters to search results.
-    
-    oracle_filters: list of terms the AI says must appear in oracle text
-    filter_mode: "any" = card matches if ANY filter term appears
-                 "all" = card must match ALL filter terms
-    
-    Falls back gracefully — if filtering leaves < 3 cards, returns
-    all cards with matching ones prioritized.
+    DEPRECATED — use apply_oracle_relevance instead, which combines
+    AI filters with prompt-extracted terms for more reliable results.
+    Kept for backward compatibility.
     """
-    if not oracle_filters:
-        return results
-
-    matching = []
-    non_matching = []
-
-    for card in results:
-        oracle = (card.get("oracle_text") or "").lower()
-        
-        if filter_mode == "all":
-            matches = all(term.lower() in oracle for term in oracle_filters)
-        else:
-            matches = any(term.lower() in oracle for term in oracle_filters)
-        
-        if matches:
-            matching.append(card)
-        else:
-            non_matching.append(card)
-
-    print(f"[AI] Oracle filters {oracle_filters} ({filter_mode}): {len(matching)} match, {len(non_matching)} don't")
-
-    # If enough matches, cap the non-matching fallbacks
-    if len(matching) >= 8:
-        return matching
-    elif len(matching) >= 5:
-        max_fallback = max(1, len(matching) // 5)
-        return matching + non_matching[:max_fallback]
-    elif len(matching) >= 3:
-        return matching + non_matching[:3]
-    else:
-        # Not enough matches — prioritize but keep everything
-        # The AI planner's filters may have been too narrow
-        print(f"[AI] Oracle filter too aggressive ({len(matching)} matches), keeping all with priority")
-        return matching + non_matching
+    return apply_oracle_relevance(results, "", ai_oracle_filters=oracle_filters)

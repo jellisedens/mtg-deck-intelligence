@@ -130,11 +130,13 @@ def apply_oracle_filters(results: list, oracle_filters: list, filter_mode: str =
     print(f"[AI] Oracle filters {oracle_filters} ({filter_mode}): {len(matching)} match, {len(non_matching)} don't")
 
     # If enough matches, cap the non-matching fallbacks
-    if len(matching) >= 5:
-        max_fallback = max(2, len(matching) // 4)
+    if len(matching) >= 8:
+        return matching
+    elif len(matching) >= 5:
+        max_fallback = max(1, len(matching) // 5)
         return matching + non_matching[:max_fallback]
     elif len(matching) >= 3:
-        return matching + non_matching[:5]
+        return matching + non_matching[:3]
     else:
         # Not enough matches — prioritize but keep everything
         # The AI planner's filters may have been too narrow

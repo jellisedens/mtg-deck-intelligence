@@ -19,7 +19,8 @@ from services.role_classifier import classify_deck_roles
 from services.deck_context import build_deck_context
 from services.effect_clarifier import check_for_effect_clarification
 from services.search_spec import generate_search_spec, apply_spec_filter
-from services.prompt_constraints import extract_deterministic_constraints, apply_deterministic_constraintsfrom services.intent_router import classify_intent, INTENT_SUGGEST, INTENT_CUTS, INTENT_ANALYZE, INTENT_SWAP
+from services.prompt_constraints import extract_deterministic_constraints, apply_deterministic_constraints 
+from services.intent_router import classify_intent, INTENT_SUGGEST, INTENT_CUTS, INTENT_ANALYZE, INTENT_SWAP
 from services.prompt_builders import (
     build_suggest_prompt, build_cuts_prompt,
     build_analyze_prompt, build_swap_prompt,

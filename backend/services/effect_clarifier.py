@@ -113,11 +113,14 @@ def check_for_effect_clarification(prompt: str) -> dict | None:
     ]):
         return None
 
-    # Non-suggest intents — cuts, analyze, swap don't need effect clarification
+    # Non-suggest intents — cuts, analyze, swap, discuss don't need effect clarification
     non_suggest_indicators = [
         "cut", "remove", "drop", "take out",
         "analyze", "analysis", "review", "evaluate", "how good",
         "swap", "replace", "switch",
+        "how does", "how do", "what does", "what is", "what are",
+        "explain", "tell me about", "why is", "why do",
+        "is it worth", "should i",
     ]
     if any(word in prompt_lower for word in non_suggest_indicators):
         return None
@@ -133,6 +136,7 @@ def check_for_effect_clarification(prompt: str) -> dict | None:
             ],
             temperature=0,
             max_tokens=300,
+            timeout=10,
         )
         content = response.choices[0].message.content.strip()
         content = content.replace("```json", "").replace("```", "").strip()

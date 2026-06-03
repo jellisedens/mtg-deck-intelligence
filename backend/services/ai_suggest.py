@@ -257,16 +257,13 @@ async def get_suggestions(prompt: str, deck_cards: list = None, deck_info: dict 
         "don't know", "no preference",
     ]
     if prompt.lower().strip() in vague_responses:
-        # Rewrite to a generic actionable prompt so intent classifier
-        # routes to suggest and the bypass/AI planner has something to work with
         prompt = "suggest cards for this deck"
         print(f"[AI] Vague clarification response detected, rewritten to: '{prompt}'")
-    else:
-        # Check for clarification needs
+    elif not intent_override:
+        # Only clarify when user hasn't explicitly selected a mode
         clarification = _check_for_clarification(prompt)
         if clarification:
             return clarification
-        # Check for effect-specific clarification
         effect_clarification = check_for_effect_clarification(prompt)
         if effect_clarification:
             return effect_clarification

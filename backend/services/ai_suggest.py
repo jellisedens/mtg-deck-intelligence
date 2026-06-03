@@ -305,6 +305,7 @@ async def get_suggestions(prompt: str, deck_cards: list = None, deck_info: dict 
     print(f"[AI] Context built ({time.time() - t_ctx:.1f}s)")
 
     # Route based on intent
+    t_route = time.time()
     if intent == INTENT_CUTS:
         result = await _handle_cuts(prompt, deck_info, simulation_data, deck_cards, card_lookup)
     elif intent == INTENT_ANALYZE:

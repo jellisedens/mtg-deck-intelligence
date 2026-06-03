@@ -306,7 +306,7 @@ async def get_suggestions(prompt: str, deck_cards: list = None, deck_info: dict 
             role_data = cached_roles
             print(f"[AI] Role classification (cached) ({time.time() - t_roles:.1f}s)")
         else:
-           role_data = classify_deck_roles(deck_cards, card_lookup, deck_info)
+            role_data = classify_deck_roles(deck_cards, card_lookup, deck_info)
             print(f"[AI] Role classification (computed) ({time.time() - t_roles:.1f}s)")
     print(f"[AI] Context built ({time.time() - t_ctx:.1f}s)")
 

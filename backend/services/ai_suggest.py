@@ -20,7 +20,7 @@ from services.deck_context import build_deck_context
 from services.effect_clarifier import check_for_effect_clarification
 from services.search_spec import generate_search_spec, apply_spec_filter
 from services.prompt_constraints import extract_deterministic_constraints, apply_deterministic_constraints 
-from services.intent_router import classify_intent, INTENT_SUGGEST, INTENT_CUTS, INTENT_ANALYZE, INTENT_SWAP
+from services.intent_router import classify_intent, INTENT_SUGGEST, INTENT_CUTS, INTENT_ANALYZE, INTENT_SWAP, INTENT_DISCUSS
 from services.prompt_builders import (
     build_suggest_prompt, build_cuts_prompt,
     build_analyze_prompt, build_swap_prompt,
@@ -305,11 +305,12 @@ async def get_suggestions(prompt: str, deck_cards: list = None, deck_info: dict 
     print(f"[AI] Context built ({time.time() - t_ctx:.1f}s)")
 
     # Route based on intent
-    t_route = time.time()
     if intent == INTENT_CUTS:
         result = await _handle_cuts(prompt, deck_info, simulation_data, deck_cards, card_lookup)
     elif intent == INTENT_ANALYZE:
         result = await _handle_analyze(prompt, deck_info, simulation_data)
+    elif intent == INTENT_DISCUSS:
+        result = await _handle_discuss(prompt, deck_info)
     elif intent == INTENT_SWAP:
         result = await _handle_swap(
             prompt, deck_cards, deck_info, simulation_data,
@@ -649,6 +650,49 @@ async def _handle_analyze(prompt: str, deck_info: dict, simulation_data: dict) -
     # Force empty arrays — analysis puts everything in strategy_notes
     result["suggestions"] = []
     result["cuts"] = []
+    result.setdefault("debug", {})
+
+    return result
+
+async def _handle_discuss(prompt: str, deck_info: dict = None) -> dict:
+    """Handle strategy discussion questions — conversational MTG knowledge."""
+    t_ai = time.time()
+
+    deck_context = ""
+    if deck_info:
+        name = deck_info.get("name", "")
+        fmt = deck_info.get("format", "commander")
+        profile = deck_info.get("strategy_profile") or {}
+        strategy = profile.get("primary_strategy", "")
+        commander = profile.get("commander_name", "")
+        if commander or name:
+            deck_context = f"\nThe user's current deck: {name} ({fmt})"
+            if commander:
+                deck_context += f", commander: {commander}"
+            if strategy:
+                deck_context += f", strategy: {strategy}"
+            deck_context += "\nReference their deck when relevant, but focus on answering the question."
+
+    system = f"""You are an expert Magic: The Gathering strategy advisor with deep knowledge of 
+all formats, mechanics, and deckbuilding theory.
+
+The user is asking a strategy question — NOT requesting card suggestions or deck changes.
+Give a thoughtful, conversational answer that teaches and informs.
+
+Respond with ONLY valid JSON:
+{{
+    "summary": "Direct answer to their question in 2-3 sentences",
+    "suggestions": [],
+    "cuts": [],
+    "strategy_notes": "Detailed explanation covering the topic. Include format-specific context, common misconceptions, and practical advice. Reference specific cards as examples where helpful, but don't turn this into a card suggestion list."
+}}
+{deck_context}"""
+
+    result = _call_ai(system, prompt)
+    print(f"[AI] Discuss AI call ({time.time() - t_ai:.1f}s)")
+
+    result.setdefault("suggestions", [])
+    result.setdefault("cuts", [])
     result.setdefault("debug", {})
 
     return result

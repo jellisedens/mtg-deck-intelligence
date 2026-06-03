@@ -14,6 +14,7 @@ INTENT_SUGGEST = "suggest"    # User wants card recommendations
 INTENT_CUTS = "cuts"          # User wants to know what to remove
 INTENT_ANALYZE = "analyze"    # User wants deck health diagnosis
 INTENT_SWAP = "swap"          # User wants to replace cards (cut + add)
+INTENT_DISCUSS = "discuss"    # User wants to talk through deck ideas (no specific suggestions)
 
 
 def classify_intent(prompt: str, has_deck: bool = False) -> dict:
@@ -47,7 +48,8 @@ Respond with ONLY one word — no explanation:
 suggest — user wants card recommendations to ADD to their deck
 cuts — user wants to know which cards to REMOVE
 analyze — user wants to understand their deck's strengths and weaknesses
-swap — user wants to REPLACE specific cards with better options"""
+swap — user wants to REPLACE specific cards with better options
+discuss — user is asking a STRATEGY QUESTION about MTG mechanics, concepts, or deckbuilding theory (not asking for specific cards or deck changes)"""
 
     try:
         fresh_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -62,7 +64,7 @@ swap — user wants to REPLACE specific cards with better options"""
         )
         result = response.choices[0].message.content.strip().lower()
 
-        if result in (INTENT_SUGGEST, INTENT_CUTS, INTENT_ANALYZE, INTENT_SWAP):
+        if result in (INTENT_SUGGEST, INTENT_CUTS, INTENT_ANALYZE, INTENT_SWAP, INTENT_DISCUSS):
             return result
 
         return INTENT_SUGGEST

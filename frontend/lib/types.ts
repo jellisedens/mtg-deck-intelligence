@@ -239,9 +239,10 @@ export interface AISuggestionResponse {
 }
 
 export interface AISuggestRequest {
-  prompt: string;
-  deck_id: string;
-  conversation_context?: Array<{
+    prompt: string;
+    deck_id: string;
+    intent_override?: string;
+    conversation_context?: Array<{
     role: string;
     content: string;
     cards_suggested?: string[];

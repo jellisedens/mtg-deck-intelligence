@@ -241,7 +241,8 @@ def _apply_playbook_filter(results: list, prompt: str, deck_info: dict) -> list:
 
 async def get_suggestions(prompt: str, deck_cards: list = None, deck_info: dict = None,
                           simulation_data: dict = None, card_lookup: dict = None,
-                          conversation_context: list = None) -> dict:
+                          conversation_context: list = None,
+                          intent_override: str = None) -> dict:
     """
     Main entry point for AI suggestions.
     Classifies intent and routes to the appropriate prompt builder.
@@ -272,10 +273,15 @@ async def get_suggestions(prompt: str, deck_cards: list = None, deck_info: dict 
         
 
 
-    # Classify intent
-    intent_result = classify_intent(prompt, has_deck=deck_cards is not None)
-    intent = intent_result["intent"]
-    print(f"[AI] Intent: {intent} ({time.time() - t_start:.1f}s)")
+    # Classify intent (skip if user explicitly selected a mode)
+    if intent_override and intent_override in (INTENT_SUGGEST, INTENT_CUTS, INTENT_ANALYZE, INTENT_SWAP, INTENT_DISCUSS):
+        intent = intent_override
+        intent_result = {"intent": intent, "confidence": "override", "method": "user_selected"}
+        print(f"[AI] Intent override: {intent}")
+    else:
+        intent_result = classify_intent(prompt, has_deck=deck_cards is not None)
+        intent = intent_result["intent"]
+        print(f"[AI] Intent: {intent} ({time.time() - t_start:.1f}s)")
 
     print(f"[AI] card_lookup provided: {card_lookup is not None}, cards: {len(card_lookup) if card_lookup else 0}")
     # Build deck context data (needed for most intents)
@@ -300,7 +306,7 @@ async def get_suggestions(prompt: str, deck_cards: list = None, deck_info: dict 
             role_data = cached_roles
             print(f"[AI] Role classification (cached) ({time.time() - t_roles:.1f}s)")
         else:
-            role_data = classify_deck_roles(deck_cards, card_lookup, deck_info)
+           role_data = classify_deck_roles(deck_cards, card_lookup, deck_info)
             print(f"[AI] Role classification (computed) ({time.time() - t_roles:.1f}s)")
     print(f"[AI] Context built ({time.time() - t_ctx:.1f}s)")
 

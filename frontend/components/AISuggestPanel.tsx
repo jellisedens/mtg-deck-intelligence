@@ -153,10 +153,12 @@ function AIResponse({
   response,
   onOptionClick,
   onAddCard,
+  filters,
 }: {
   response: AISuggestionResponse;
   onOptionClick?: (option: string) => void;
   onAddCard?: (scryfallId: string, cardName: string) => Promise<void>;
+  filters?: { maxCmc: number | null; maxPrice: number | null; types: string[] };
 }) {
   return (
     <div className="space-y-3">
@@ -180,7 +182,24 @@ function AIResponse({
           <div className="text-xxs text-text-muted uppercase tracking-wider">
             suggestions ({response.suggestions.length})
           </div>
-          {response.suggestions.map((card, i) => (
+          {response.suggestions
+            .filter((card) => {
+              if (!filters) return true;
+              if (filters.maxCmc !== null) {
+                const cmc = parseInt(card.mana_cost?.replace(/[^0-9]/g, "") || "0") || 0;
+                // Use the actual CMC from type_line parsing — rough but works
+                const cmcMatch = card.mana_cost?.match(/\{(\d+)\}/);
+                const colorPips = (card.mana_cost?.match(/\{[WUBRG]\}/g) || []).length;
+                const genericCost = cmcMatch ? parseInt(cmcMatch[1]) : 0;
+                const totalCmc = genericCost + colorPips;
+                if (totalCmc > filters.maxCmc) return false;
+              }
+              if (filters.maxPrice !== null && card.price_usd) {
+                if (parseFloat(card.price_usd) > filters.maxPrice) return false;
+              }
+              return true;
+            })
+            .map((card, i) => (
             <SuggestionCardRow
               key={`${card.card_name}-${i}`}
               card={card}
@@ -243,6 +262,12 @@ export default function AISuggestPanel({ deckId, onAddCard }: Props) {
     cards_accepted?: string[];
   }>>([]);
   const [lastClarificationCategory, setLastClarificationCategory] = useState<string | null>(null);
+  const [mode, setMode] = useState<string | null>(null);
+  const [filters, setFilters] = useState({
+    maxCmc: null as number | null,
+    maxPrice: null as number | null,
+    types: [] as string[],
+  });
   const bottomRef = useRef<HTMLDivElement>(null);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -289,6 +314,7 @@ export default function AISuggestPanel({ deckId, onAddCard }: Props) {
       const response = await aiSuggest({
         prompt: promptToSend,
         deck_id: deckId,
+        intent_override: mode || undefined,
         conversation_context: conversationHistory.length > 0 ? conversationHistory : undefined,
       });
 
@@ -349,13 +375,69 @@ export default function AISuggestPanel({ deckId, onAddCard }: Props) {
 
   return (
     <div className="panel flex flex-col h-[500px]">
-      <div className="px-4 py-3 border-b border-border flex-shrink-0">
-        <span className="text-xs text-text-muted font-medium uppercase tracking-wider">
-          AI Assistant
-        </span>
-        <p className="text-xxs text-text-muted mt-0.5">
-          suggest cards, find cuts, analyze strategy, or swap cards
-        </p>
+      <div className="px-4 py-3 border-b border-border flex-shrink-0 space-y-2">
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <span className="text-xxs text-text-muted font-medium uppercase tracking-wider mr-1">
+            Mode:
+          </span>
+          {[
+            { key: null, label: "Auto", icon: "✦" },
+            { key: "suggest", label: "Suggest", icon: "💡" },
+            { key: "cuts", label: "Cuts", icon: "✂️" },
+            { key: "swap", label: "Swap", icon: "🔄" },
+            { key: "discuss", label: "Discuss", icon: "💬" },
+          ].map(({ key, label, icon }) => (
+            <button
+              key={label}
+              onClick={() => setMode(key)}
+              className={`text-xxs px-2 py-1 rounded transition-colors ${
+                mode === key
+                  ? "bg-accent-green/20 text-accent-green border border-accent-green/40"
+                  : "bg-bg-tertiary text-text-muted hover:text-text-secondary border border-transparent"
+              }`}
+            >
+              {icon} {label}
+            </button>
+          ))}
+        </div>
+
+        {(mode === "suggest" || mode === null) && (
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-xxs text-text-muted">Filters:</span>
+            <select
+              value={filters.maxCmc ?? ""}
+              onChange={(e) => setFilters(f => ({ ...f, maxCmc: e.target.value ? Number(e.target.value) : null }))}
+              className="text-xxs bg-bg-tertiary text-text-secondary border border-border rounded px-1.5 py-0.5"
+            >
+              <option value="">CMC: Any</option>
+              <option value="1">CMC ≤ 1</option>
+              <option value="2">CMC ≤ 2</option>
+              <option value="3">CMC ≤ 3</option>
+              <option value="4">CMC ≤ 4</option>
+              <option value="5">CMC ≤ 5</option>
+              <option value="7">CMC ≤ 7</option>
+            </select>
+            <select
+              value={filters.maxPrice ?? ""}
+              onChange={(e) => setFilters(f => ({ ...f, maxPrice: e.target.value ? Number(e.target.value) : null }))}
+              className="text-xxs bg-bg-tertiary text-text-secondary border border-border rounded px-1.5 py-0.5"
+            >
+              <option value="">Price: Any</option>
+              <option value="1">≤ $1</option>
+              <option value="5">≤ $5</option>
+              <option value="10">≤ $10</option>
+              <option value="25">≤ $25</option>
+            </select>
+            {filters.maxCmc !== null || filters.maxPrice !== null ? (
+              <button
+                onClick={() => setFilters({ maxCmc: null, maxPrice: null, types: [] })}
+                className="text-xxs text-accent-red hover:text-accent-red/80 transition-colors"
+              >
+                reset
+              </button>
+            ) : null}
+          </div>
+        )}
       </div>
 
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
@@ -404,6 +486,7 @@ export default function AISuggestPanel({ deckId, onAddCard }: Props) {
                   <AIResponse
                     response={msg.response}
                     onOptionClick={handleOptionClick}
+                    filters={filters}
                     onAddCard={onAddCard ? async (scryfallId, cardName) => {
                       await onAddCard(scryfallId, cardName);
                       // Track acceptance in conversation history

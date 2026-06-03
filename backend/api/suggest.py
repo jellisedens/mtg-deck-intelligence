@@ -63,6 +63,7 @@ async def suggest_cards(
         simulation_data=simulation_data,
         card_lookup=card_lookup,
         conversation_context=request.conversation_context,
+        intent_override=request.intent_override,
     )
 
     if "error" in result:

@@ -7,6 +7,7 @@ class SuggestRequest(BaseModel):
     prompt: str
     deck_id: Optional[UUID] = None
     conversation_context: Optional[list[dict]] = None
+    intent_override: Optional[str] = None
 
 
 class CardSuggestion(BaseModel):

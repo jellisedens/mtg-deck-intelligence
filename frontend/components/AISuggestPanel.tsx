@@ -197,6 +197,11 @@ function AIResponse({
               if (filters.maxPrice !== null && card.price_usd) {
                 if (parseFloat(card.price_usd) > filters.maxPrice) return false;
               }
+              if (filters.types && filters.types.length > 0) {
+                const typeLine = card.type_line || "";
+                const matchesType = filters.types.some(t => typeLine.includes(t));
+                if (!matchesType) return false;
+              }
               return true;
             })
             .map((card, i) => (
@@ -428,7 +433,27 @@ export default function AISuggestPanel({ deckId, onAddCard }: Props) {
               <option value="10">≤ $10</option>
               <option value="25">≤ $25</option>
             </select>
-            {filters.maxCmc !== null || filters.maxPrice !== null ? (
+            <div className="flex items-center gap-1 flex-wrap">
+              {["Creature", "Instant", "Sorcery", "Enchantment", "Artifact", "Equipment", "Land"].map((type) => (
+                <button
+                  key={type}
+                  onClick={() => setFilters(f => ({
+                    ...f,
+                    types: f.types.includes(type)
+                      ? f.types.filter(t => t !== type)
+                      : [...f.types, type],
+                  }))}
+                  className={`text-xxs px-1.5 py-0.5 rounded transition-colors ${
+                    filters.types.includes(type)
+                      ? "bg-accent-green/20 text-accent-green border border-accent-green/40"
+                      : "bg-bg-tertiary text-text-muted hover:text-text-secondary border border-transparent"
+                  }`}
+                >
+                  {type}
+                </button>
+              ))}
+            </div>
+            {filters.maxCmc !== null || filters.maxPrice !== null || filters.types.length > 0 ? (
               <button
                 onClick={() => setFilters({ maxCmc: null, maxPrice: null, types: [] })}
                 className="text-xxs text-accent-red hover:text-accent-red/80 transition-colors"

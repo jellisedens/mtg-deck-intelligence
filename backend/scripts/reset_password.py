@@ -1,3 +1,5 @@
+import sys
+sys.path.insert(0, "/app")
 from database.session import SessionLocal
 from sqlalchemy import text
 from passlib.context import CryptContext

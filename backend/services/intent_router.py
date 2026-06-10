@@ -45,11 +45,13 @@ def _ai_classify(prompt: str) -> str:
     system = """Classify this Magic: The Gathering deck question into exactly one category.
 Respond with ONLY one word — no explanation:
 
-suggest — user wants card recommendations to ADD to their deck
+suggest — user wants card recommendations or is describing cards they want (e.g., "cards that benefit from lifegain", "trample cards", "equipment that grants flying", "cards that synergize with sacrifice")
 cuts — user wants to know which cards to REMOVE
 analyze — user wants to understand their deck's strengths and weaknesses
 swap — user wants to REPLACE specific cards with better options
-discuss — user is asking a STRATEGY QUESTION about MTG mechanics, concepts, or deckbuilding theory (not asking for specific cards or deck changes)"""
+discuss — user is asking a THEORY question about how MTG works, not requesting specific cards (e.g., "how does trample work", "is lifegain viable in commander", "what makes a good mana base")
+
+IMPORTANT: If the prompt mentions "cards", "cards that", "suggest", or describes card effects, it is ALWAYS suggest, never discuss."""
 
     try:
         fresh_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))

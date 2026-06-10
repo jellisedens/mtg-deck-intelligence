@@ -45,15 +45,48 @@ def _get_deck_color_identity(deck_info: dict = None, deck_cards: list = None, ca
         ci = profile.get("color_identity")
         if ci:
             return ci
-    # Source 3: compute from commander in card_lookup
+        # Source 3: EDHREC profile commander data
+        edhrec = profile.get("edhrec_profile", {})
+        edhrec_ci = edhrec.get("color_identity")
+        if edhrec_ci:
+            return edhrec_ci
+    # Source 4: compute from commander in card_lookup
     if deck_cards and card_lookup:
         for card in deck_cards:
             if card.board == "commander":
                 card_data = card_lookup.get(card.scryfall_id, {})
                 ci = card_data.get("color_identity")
                 if ci:
+                    # Auto-save to preferences so we don't miss it next time
+                    if deck_info:
+                        prefs = deck_info.get("preferences") or {}
+                        prefs["color_identity"] = ci
+                        deck_info["preferences"] = prefs
+                        _persist_color_identity(deck_info, ci)
                     return ci
     return []
+
+
+def _persist_color_identity(deck_info: dict, color_identity: list):
+    """Save color identity to deck preferences in database."""
+    try:
+        from database.session import SessionLocal
+        from sqlalchemy import text
+        import json
+        db = SessionLocal()
+        deck_name = deck_info.get("name")
+        if deck_name:
+            prefs = deck_info.get("preferences") or {}
+            prefs["color_identity"] = color_identity
+            db.execute(
+                text("UPDATE decks SET preferences = :prefs WHERE name = :name"),
+                {"prefs": json.dumps(prefs), "name": deck_name},
+            )
+            db.commit()
+            print(f"[AI] Auto-saved color identity {color_identity} to deck preferences")
+        db.close()
+    except Exception as e:
+        print(f"[AI] Failed to persist color identity: {e}")
 
 
 def _filter_by_color_identity(results: list, deck_color_identity: list) -> list:

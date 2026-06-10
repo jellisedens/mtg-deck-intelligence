@@ -125,6 +125,15 @@ def check_for_effect_clarification(prompt: str) -> dict | None:
     if any(word in prompt_lower for word in non_suggest_indicators):
         return None
 
+    # General deck requests don't need effect clarification
+    general_patterns = [
+        "for this deck", "for my deck", "for the deck",
+        "good cards", "best cards", "suggest cards",
+        "suggest some", "recommend cards", "what cards",
+    ]
+    if any(p in prompt_lower for p in general_patterns):
+        return None
+
     # ── AI clarification check ───────────────────────────────
     try:
         client = _get_client()

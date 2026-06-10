@@ -299,12 +299,15 @@ export default function AISuggestPanel({ deckId, onAddCard }: Props) {
 
     let promptToSend = userMessage;
     if (lastClarificationCategory) {
+      const words = userMessage.trim().split(/\s+/);
       const vague = ["all types", "all", "everything", "any", "any type"];
+      
       if (vague.includes(userMessage.toLowerCase().trim())) {
         promptToSend = `suggest all types of ${lastClarificationCategory}`;
-      } else {
+      } else if (words.length <= 3) {
         promptToSend = `suggest ${userMessage.toLowerCase()} for ${lastClarificationCategory}`;
       }
+      // 4+ words = new prompt, send as-is
       setLastClarificationCategory(null);
     }
 

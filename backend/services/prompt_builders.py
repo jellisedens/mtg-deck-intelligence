@@ -48,6 +48,8 @@ Rules:
 - A card that specifically mentions or interacts with the deck's creature type is ALWAYS better than a generic card of the same role
 - Generic staples (Sol Ring, Arcane Signet) are acceptable as fallback suggestions but should not dominate when deck-specific options exist
 - Reference specific synergies with cards already in the deck
+- Cards marked ★PROVEN are used in real commander decks with this commander — STRONGLY PREFER these over unproven alternatives
+- Higher inclusion % and synergy % means more players found the card effective with this commander
 - If deck is permanent-heavy, prefer creature-based draw/ramp/removal
 - If deck is spell-heavy, prefer instant/sorcery-based options
 - If average CMC > 3.5, prefer lower-cost suggestions
@@ -105,7 +107,12 @@ Rules:
     user_msg += f"\nSearch results ({len(search_results)} cards):\n"
     for card in search_results:
         price = card.get("prices", {}).get("usd", "N/A")
-        user_msg += f"- {card['name']} | {card['mana_cost']} | {card['type_line']} | ${price} | ID: {card['scryfall_id']}\n"
+        edhrec_tag = ""
+        if card.get("edhrec_proven"):
+            syn = card.get("edhrec_synergy", 0)
+            inc = card.get("edhrec_inclusion_pct", 0)
+            edhrec_tag = f" ★PROVEN ({inc:.0f}% of decks, {syn:.0f}% synergy)"
+        user_msg += f"- {card['name']} | {card['mana_cost']} | {card['type_line']} | ${price} | ID: {card['scryfall_id']}{edhrec_tag}\n"
         if card.get("oracle_text"):
             user_msg += f"  Text: {card['oracle_text'][:150]}\n"
 

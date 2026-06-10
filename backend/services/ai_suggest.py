@@ -465,6 +465,49 @@ async def _handle_suggest(prompt: str, deck_cards: list, deck_info: dict,
             except Exception as e:
                 print(f"[AI] EDHREC fetch failed (non-fatal): {e}")
 
+    # EDHREC-first: load commander-proven cards as primary source
+    edhrec_cards_resolved = []
+    if edhrec_profile:
+        t_edhrec = time.time()
+        all_edhrec = []
+        for card in edhrec_profile.get("cards", []):
+            name_lower = card["name"].lower()
+            if name_lower in existing_cards:
+                continue
+            if card.get("inclusion_pct", 0) >= 20 or card.get("synergy", 0) >= 0.15:
+                all_edhrec.append(card)
+
+        if all_edhrec:
+            identifiers = [{"name": c["name"]} for c in all_edhrec[:75]]
+            resolved = await scryfall_service.get_collection(identifiers)
+            if "data" in resolved:
+                edhrec_lookup = {c["name"].lower(): c for c in all_edhrec}
+                for card_data in resolved["data"]:
+                    name_lower = card_data.get("name", "").lower()
+                    ecard = edhrec_lookup.get(name_lower, {})
+                    edhrec_cards_resolved.append({
+                        "name": card_data.get("name", ""),
+                        "mana_cost": card_data.get("mana_cost", ""),
+                        "cmc": card_data.get("cmc", 0),
+                        "type_line": card_data.get("type_line", ""),
+                        "oracle_text": card_data.get("oracle_text", ""),
+                        "colors": card_data.get("colors", []),
+                        "color_identity": card_data.get("color_identity", []),
+                        "rarity": card_data.get("rarity", ""),
+                        "prices": card_data.get("prices", {}),
+                        "image_uris": card_data.get("image_uris", {}),
+                        "scryfall_id": card_data.get("id", ""),
+                        "edhrec_rank": card_data.get("edhrec_rank"),
+                        "power": card_data.get("power"),
+                        "toughness": card_data.get("toughness"),
+                        "keywords": card_data.get("keywords", []),
+                        "_edhrec_proven": True,
+                        "_edhrec_synergy": ecard.get("synergy", 0),
+                        "_edhrec_inclusion_pct": ecard.get("inclusion_pct", 0),
+                    })
+                print(f"[AI] EDHREC-first: {len(edhrec_cards_resolved)} cards resolved ({time.time() - t_edhrec:.1f}s)")
+
+    # Scryfall search — fills gaps EDHREC doesn't cover
     t_search = time.time()
     search_results = await _execute_searches(
         queries=plan.get("scryfall_queries", []),
@@ -472,43 +515,14 @@ async def _handle_suggest(prompt: str, deck_cards: list, deck_info: dict,
     )
     print(f"[AI] Scryfall results: {len(search_results)} ({time.time() - t_search:.1f}s)")
 
-    # Vector search — find conceptually similar cards
-    search_results = _merge_vector_results(search_results, prompt, deck_info, existing_cards)
+    # Merge: EDHREC first, then Scryfall (deduplicated)
+    seen_names = {c["name"].lower() for c in edhrec_cards_resolved}
+    scryfall_unique = [c for c in search_results if c["name"].lower() not in seen_names]
+    search_results = edhrec_cards_resolved + scryfall_unique
+    print(f"[AI] Merged: {len(edhrec_cards_resolved)} EDHREC + {len(scryfall_unique)} Scryfall = {len(search_results)} total")
 
-    # EDHREC merge — add high-synergy commander cards to search pool
-    if edhrec_profile:
-        t_edhrec = time.time()
-        synergy_cards = get_synergy_cards(edhrec_profile, list(existing_cards), min_synergy=0.2)
-        seen_names = {r["name"].lower() for r in search_results}
-        edhrec_added = 0
-        for ecard in synergy_cards[:20]:
-            if ecard["name"].lower() not in seen_names:
-                try:
-                    card_data = await scryfall_service.get_card_by_name(ecard["name"])
-                    if "error" not in card_data:
-                        search_results.append({
-                            "name": card_data.get("name", ecard["name"]),
-                            "mana_cost": card_data.get("mana_cost", ""),
-                            "cmc": card_data.get("cmc", 0),
-                            "type_line": card_data.get("type_line", ""),
-                            "oracle_text": card_data.get("oracle_text", ""),
-                            "colors": card_data.get("colors", []),
-                            "color_identity": card_data.get("color_identity", []),
-                            "rarity": card_data.get("rarity", ""),
-                            "prices": card_data.get("prices", {}),
-                            "image_uris": card_data.get("image_uris", {}),
-                            "scryfall_id": card_data.get("id", ""),
-                            "edhrec_rank": card_data.get("edhrec_rank"),
-                            "power": card_data.get("power"),
-                            "toughness": card_data.get("toughness"),
-                            "edhrec_inclusion_pct": ecard["inclusion_pct"],
-                            "edhrec_synergy": ecard["synergy"],
-                        })
-                        seen_names.add(ecard["name"].lower())
-                        edhrec_added += 1
-                except Exception:
-                    pass
-        print(f"[AI] EDHREC added {edhrec_added} synergy cards ({time.time() - t_edhrec:.1f}s)")
+    # Vector search supplements
+    search_results = _merge_vector_results(search_results, prompt, deck_info, existing_cards)
 
     if len(search_results) < 5:
         t_broaden = time.time()
@@ -543,7 +557,7 @@ async def _handle_suggest(prompt: str, deck_cards: list, deck_info: dict,
     # Slim card data for the AI prompt to reduce token count
     slim_results = []
     for card in trimmed_results:
-        slim_results.append({
+        slim = {
             "name": card["name"],
             "mana_cost": card.get("mana_cost", ""),
             "cmc": card.get("cmc", 0),
@@ -552,7 +566,12 @@ async def _handle_suggest(prompt: str, deck_cards: list, deck_info: dict,
             "rarity": card.get("rarity", ""),
             "scryfall_id": card["scryfall_id"],
             "edhrec_rank": card.get("edhrec_rank"),
-        })
+        }
+        if card.get("_edhrec_proven"):
+            slim["edhrec_proven"] = True
+            slim["edhrec_synergy"] = card.get("_edhrec_synergy", 0)
+            slim["edhrec_inclusion_pct"] = card.get("_edhrec_inclusion_pct", 0)
+        slim_results.append(slim)
 
 
     # Pass constraints to prompt builder

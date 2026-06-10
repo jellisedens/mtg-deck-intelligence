@@ -186,8 +186,6 @@ function AIResponse({
             .filter((card) => {
               if (!filters) return true;
               if (filters.maxCmc !== null) {
-                const cmc = parseInt(card.mana_cost?.replace(/[^0-9]/g, "") || "0") || 0;
-                // Use the actual CMC from type_line parsing — rough but works
                 const cmcMatch = card.mana_cost?.match(/\{(\d+)\}/);
                 const colorPips = (card.mana_cost?.match(/\{[WUBRG]\}/g) || []).length;
                 const genericCost = cmcMatch ? parseInt(cmcMatch[1]) : 0;
@@ -266,7 +264,6 @@ export default function AISuggestPanel({ deckId, onAddCard }: Props) {
     cards_suggested?: string[];
     cards_accepted?: string[];
   }>>([]);
-  const [lastClarificationCategory, setLastClarificationCategory] = useState<string | null>(null);
   const [mode, setMode] = useState<string | null>(null);
   const [filters, setFilters] = useState({
     maxCmc: null as number | null,
@@ -298,18 +295,6 @@ export default function AISuggestPanel({ deckId, onAddCard }: Props) {
     if (!userMessage.trim() || loading) return;
 
     let promptToSend = userMessage;
-    if (lastClarificationCategory) {
-      const words = userMessage.trim().split(/\s+/);
-      const vague = ["all types", "all", "everything", "any", "any type"];
-      
-      if (vague.includes(userMessage.toLowerCase().trim())) {
-        promptToSend = `suggest all types of ${lastClarificationCategory}`;
-      } else if (words.length <= 3) {
-        promptToSend = `suggest ${userMessage.toLowerCase()} for ${lastClarificationCategory}`;
-      }
-      // 4+ words = new prompt, send as-is
-      setLastClarificationCategory(null);
-    }
 
     setMessages((prev) => [
       ...prev,
@@ -325,16 +310,6 @@ export default function AISuggestPanel({ deckId, onAddCard }: Props) {
         intent_override: mode || undefined,
         conversation_context: conversationHistory.length > 0 ? conversationHistory : undefined,
       });
-
-      if (response.needs_clarification && (response as any)._original_category) {
-        setLastClarificationCategory((response as any)._original_category);
-      } else if (response.needs_clarification) {
-        const question = response.clarification_question || "";
-        const categoryMatch = question.match(/what (?:type|kind) of (\w+)/i);
-        if (categoryMatch) {
-          setLastClarificationCategory(categoryMatch[1].toLowerCase());
-        }
-      }
 
       setMessages((prev) => {
         const updated = [...prev];

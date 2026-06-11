@@ -931,7 +931,7 @@ def _check_for_clarification(prompt: str) -> dict | None:
         # Also trigger if it's short and vague (but NOT if it has an action word)
         is_vague = (
             not has_action
-            and all(w in prompt_lower for w in term_words)
+            and all(re.search(rf'\b{re.escape(w)}\b', prompt_lower) for w in term_words)
             and len(prompt_lower.split()) <= 4
             and not any(qualifier in prompt_lower for qualifier in [
                 "under", "below", "cheap", "budget", "expensive",

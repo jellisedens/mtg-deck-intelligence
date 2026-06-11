@@ -35,35 +35,35 @@ logger = logging.getLogger(__name__)
 def _get_deck_color_identity(deck_info: dict = None, deck_cards: list = None, card_lookup: dict = None) -> list:
     """Get deck's color identity from multiple sources (fallback chain)."""
     if deck_info:
-        # Source 1: preferences (set when commander is added)
         prefs = deck_info.get("preferences") or {}
         ci = prefs.get("color_identity")
         if ci:
+            print(f"[CI] From preferences: {ci}")
             return ci
-        # Source 2: strategy profile
         profile = deck_info.get("strategy_profile") or {}
         ci = profile.get("color_identity")
         if ci:
+            print(f"[CI] From strategy_profile: {ci}")
             return ci
-        # Source 3: EDHREC profile commander data
         edhrec = profile.get("edhrec_profile", {})
         edhrec_ci = edhrec.get("color_identity")
         if edhrec_ci:
+            print(f"[CI] From edhrec: {edhrec_ci}")
             return edhrec_ci
-    # Source 4: compute from commander in card_lookup
     if deck_cards and card_lookup:
         for card in deck_cards:
             if card.board == "commander":
                 card_data = card_lookup.get(card.scryfall_id, {})
                 ci = card_data.get("color_identity")
+                print(f"[CI] From commander card '{card.card_name}': {ci} (type: {type(ci)})")
                 if ci:
-                    # Auto-save to preferences so we don't miss it next time
                     if deck_info:
                         prefs = deck_info.get("preferences") or {}
                         prefs["color_identity"] = ci
                         deck_info["preferences"] = prefs
                         _persist_color_identity(deck_info, ci)
                     return ci
+    print(f"[CI] No color identity found")
     return []
 
 

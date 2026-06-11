@@ -196,3 +196,67 @@ def format_edhrec_context_for_prompt(profile: dict, deck_card_names: list, max_c
     lines.append("Prioritize high-synergy cards over generic staples when both fit the user's request.")
 
     return "\n".join(lines)
+
+async def fetch_average_deck(commander_name: str) -> Optional[dict]:
+    """
+    Fetch the EDHREC average decklist for a commander.
+    Returns a complete 99-card deck with Scryfall IDs.
+    """
+    slug = _commander_slug(commander_name)
+    url = f"https://json.edhrec.com/pages/average-decks/{slug}.json"
+
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                url,
+                headers={"User-Agent": "MTGDeckIntelligence/1.0"},
+                timeout=15,
+            )
+            if resp.status_code != 200:
+                logger.warning(f"EDHREC average deck returned {resp.status_code} for {slug}")
+                return None
+
+            data = resp.json()
+    except Exception as e:
+        logger.warning(f"EDHREC average deck fetch failed for {slug}: {e}")
+        return None
+
+    container = data.get("container", {})
+    json_dict = container.get("json_dict", {})
+    cardlists = json_dict.get("cardlists", [])
+    card_info = json_dict.get("card", {})
+
+    cards = []
+    basics = {}
+
+    for cardlist in cardlists:
+        tag = cardlist.get("tag", "")
+        for card in cardlist.get("cardviews", []):
+            name = card.get("name", "")
+            scryfall_id = card.get("id", "")
+            if not name:
+                continue
+
+            # Basics have quantity in the label (e.g., "29 Mountains")
+            if tag == "basics":
+                label = card.get("label", "")
+                import re
+                qty_match = re.match(r"(\d+)\s+", label)
+                qty = int(qty_match.group(1)) if qty_match else 1
+                basics[name] = qty
+            else:
+                cards.append({
+                    "name": name,
+                    "scryfall_id": scryfall_id,
+                    "category": tag,
+                })
+
+    return {
+        "commander_name": commander_name,
+        "slug": slug,
+        "total_decks": data.get("num_decks_avg", 0),
+        "total_cards": data.get("total_card_count", 100),
+        "cards": cards,
+        "basics": basics,
+        "color_identity": card_info.get("color_identity", []),
+    }

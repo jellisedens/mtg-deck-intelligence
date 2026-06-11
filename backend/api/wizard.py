@@ -3,7 +3,7 @@ Deck Wizard - auto-generates a starter shell for new Commander decks.
 
 Modes:
 - starter: ~25 top EDHREC spells + 37 lands (quick start, room to customize)
-- average: ~62 EDHREC spells + 37 lands (full average community deck)
+- average: complete EDHREC average deck (what most players actually run)
 """
 
 import asyncio
@@ -18,7 +18,7 @@ from models.user import User
 from models.deck import Deck
 from models.deck_card import DeckCard
 from api.deps import get_current_user
-from services.edhrec import fetch_commander_profile
+from services.edhrec import fetch_commander_profile, fetch_average_deck
 from services.scryfall import scryfall_service
 
 router = APIRouter(prefix="/decks", tags=["wizard"])
@@ -134,7 +134,7 @@ async def generate_deck_shell(
 
     Modes:
     - starter: ~25 EDHREC spells + 37 basic lands (quick start)
-    - average: ~62 EDHREC spells + 37 lands including EDHREC utility lands (full average deck)
+    - average: complete EDHREC average deck (what most players actually run)
     """
     deck = db.query(Deck).filter(Deck.id == deck_id).first()
     if not deck:
@@ -163,6 +163,89 @@ async def generate_deck_shell(
     if slots_available <= 0:
         raise HTTPException(status_code=400, detail="Deck is already at 100 cards")
 
+    # ── Average Mode: fetch complete EDHREC average deck ─────
+    if mode == "average":
+        avg_deck = await fetch_average_deck(commander.card_name)
+        if not avg_deck:
+            raise HTTPException(status_code=502, detail="Failed to fetch EDHREC average deck for this commander")
+
+        added_cards = []
+
+        # Batch resolve non-land cards via Scryfall collection
+        non_basic_cards = avg_deck["cards"]
+        identifiers = [{"id": c["scryfall_id"]} for c in non_basic_cards if c["scryfall_id"]]
+        name_only = [c for c in non_basic_cards if not c["scryfall_id"]]
+        identifiers.extend([{"name": c["name"]} for c in name_only])
+
+        resolved = await scryfall_service.get_collection(identifiers)
+        if "data" in resolved:
+            for card_data in resolved["data"]:
+                name = card_data.get("name", "")
+                if name.lower() in existing_names or name.lower() == commander.card_name.lower():
+                    continue
+                card = DeckCard(
+                    deck_id=deck.id,
+                    scryfall_id=card_data["id"],
+                    card_name=name,
+                    quantity=1,
+                    board="main",
+                )
+                db.add(card)
+                added_cards.append({
+                    "card_name": name,
+                    "scryfall_id": card_data["id"],
+                    "type": card_data.get("type_line", ""),
+                    "source": "edhrec_average",
+                })
+                existing_names.add(name.lower())
+
+        # Add basic lands
+        for basic_name, qty in avg_deck.get("basics", {}).items():
+            try:
+                card_data = await scryfall_service.get_card_by_name(basic_name)
+                if "error" not in card_data:
+                    card = DeckCard(
+                        deck_id=deck.id,
+                        scryfall_id=card_data["id"],
+                        card_name=card_data["name"],
+                        quantity=qty,
+                        board="main",
+                    )
+                    db.add(card)
+                    added_cards.append({
+                        "card_name": card_data["name"],
+                        "scryfall_id": card_data["id"],
+                        "type": "Basic Land",
+                        "quantity": qty,
+                        "source": "edhrec_average",
+                    })
+            except Exception as e:
+                print(f"[Wizard] Failed to resolve basic {basic_name}: {e}")
+
+        # Save color identity and cache profile
+        profile = deck.strategy_profile or {}
+        profile["color_identity"] = avg_deck.get("color_identity", [])
+        deck.strategy_profile = profile
+
+        prefs = deck.preferences or {}
+        prefs["color_identity"] = avg_deck.get("color_identity", [])
+        deck.preferences = prefs
+
+        db.commit()
+
+        total_added = sum(c.get("quantity", 1) for c in added_cards)
+        return {
+            "status": "ok",
+            "mode": "average",
+            "commander": commander.card_name,
+            "color_identity": avg_deck.get("color_identity", []),
+            "cards_added": total_added,
+            "total_deck_size": existing_count + total_added,
+            "edhrec_decks_analyzed": avg_deck.get("total_decks", 0),
+            "cards": added_cards,
+        }
+
+    # ── Starter Mode: EDHREC spells + basic mana base ────────
     commander_data = await scryfall_service.get_card_by_name(commander.card_name)
     if "error" in commander_data:
         raise HTTPException(status_code=502, detail="Failed to fetch commander data")
@@ -182,16 +265,10 @@ async def generate_deck_shell(
             cards_to_add.append(card_name)
             existing_names.add(card_name.lower())
 
-    # Determine how many spells to pull based on mode
+    # Starter: ~25 spells, leave room for user customization
     land_slots = 37
-    if mode == "average":
-        # Fill as much as possible: 99 - 1 commander - 37 lands = 61 spell slots
-        spell_slots = min(slots_available - land_slots - len(cards_to_add), 62)
-        spell_slots = max(spell_slots, 15)
-    else:
-        # Starter: ~25 spells, leave room for user customization
-        spell_slots = min(slots_available - land_slots - len(cards_to_add), 25)
-        spell_slots = max(spell_slots, 15)
+    spell_slots = min(slots_available - land_slots - len(cards_to_add), 25)
+    spell_slots = max(spell_slots, 15)
 
     # EDHREC staples
     if edhrec_profile:
@@ -203,7 +280,7 @@ async def generate_deck_shell(
             if pick["name"].lower() not in existing_names:
                 cards_to_add.append(pick["name"])
                 existing_names.add(pick["name"].lower())
-        print(f"[Wizard] Mode={mode}: selected {len(edhrec_picks)} EDHREC spells")
+        print(f"[Wizard] Mode=starter: selected {len(edhrec_picks)} EDHREC spells")
 
     # Mana base
     land_names = _build_mana_base(color_identity, total_lands=land_slots)
@@ -213,28 +290,6 @@ async def generate_deck_shell(
         if land.lower() in existing_names and land not in basic_names:
             continue
         land_counts[land] = land_counts.get(land, 0) + 1
-
-    # In average mode, also pull EDHREC-recommended utility lands
-    edhrec_lands_added = 0
-    if mode == "average" and edhrec_profile:
-        edhrec_lands = _select_edhrec_lands(edhrec_profile, existing_names, max_lands=8)
-        # Replace some basics with EDHREC utility lands
-        basics_to_remove = min(len(edhrec_lands), sum(v for k, v in land_counts.items() if k in basic_names) // 2)
-        removed = 0
-        for basic in list(basic_names):
-            if removed >= basics_to_remove:
-                break
-            if basic in land_counts and land_counts[basic] > 2:
-                can_remove = min(land_counts[basic] - 2, basics_to_remove - removed)
-                land_counts[basic] -= can_remove
-                removed += can_remove
-
-        for eland in edhrec_lands[:basics_to_remove]:
-            if eland["name"].lower() not in existing_names:
-                land_counts[eland["name"]] = 1
-                existing_names.add(eland["name"].lower())
-                edhrec_lands_added += 1
-        print(f"[Wizard] Added {edhrec_lands_added} EDHREC utility lands")
 
     # Resolve non-land cards via Scryfall
     total_resolved = 0

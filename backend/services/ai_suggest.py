@@ -1198,6 +1198,15 @@ def _try_direct_queries(prompt: str, deck_info: dict = None) -> dict | None:
     # Clean up whitespace
     remaining = [w for w in stripped.split() if len(w) > 1]
     
+    # Priority ordering: specific subcategories first
+    priority_order = [
+        "mana_dorks", "mana_rocks", "land_ramp", "cost_reducers",   # ramp subs
+        "spot_removal", "board_wipes",                                # removal subs
+        "ramp", "removal", "card_draw",                               # broad categories
+        "creatures", "lands", "protection", "tutors", "tokens",
+        "recursion", "sacrifice", "equipment", "enchantments",
+    ]
+    
     # Check if remaining words match any trigger
     matched_pattern = None
     matched_trigger = None
@@ -1222,14 +1231,7 @@ def _try_direct_queries(prompt: str, deck_info: dict = None) -> dict | None:
         is_simple = False
         print(f"[AI] Bypass check: no trigger matched, remaining={remaining}")
     
-    # Priority ordering: specific subcategories first
-    priority_order = [
-        "mana_dorks", "mana_rocks", "land_ramp", "cost_reducers",   # ramp subs
-        "spot_removal", "board_wipes",                                # removal subs
-        "ramp", "removal", "card_draw",                               # broad categories
-        "creatures", "lands", "protection", "tutors", "tokens",
-        "recursion", "sacrifice", "equipment", "enchantments",
-    ]
+    
     
     # Only bypass for simple requests (1-2 meaningful words)
     # "suggest ramp cards" → ["ramp"] → bypass

@@ -28,6 +28,8 @@ async def suggest_cards(
     simulation_data = None
     card_lookup = None
 
+    print(f"[ENDPOINT] prompt: '{request.prompt}' intent_override: '{request.intent_override}'")
+
     if request.deck_id:
         deck = db.query(Deck).filter(Deck.id == request.deck_id).first()
         if not deck:

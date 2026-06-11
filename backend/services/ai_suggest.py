@@ -432,6 +432,15 @@ async def _handle_suggest(prompt: str, deck_cards: list, deck_info: dict,
     """Handle card suggestion requests."""
     t_plan = time.time()
 
+    # Resolve color identity early so all downstream code has it
+    deck_ci = _get_deck_color_identity(deck_info, deck_cards, card_lookup)
+    if deck_ci and deck_info:
+        prefs = deck_info.get("preferences") or {}
+        if not prefs.get("color_identity"):
+            prefs["color_identity"] = deck_ci
+            deck_info["preferences"] = prefs
+            print(f"[AI] Color identity resolved early: {deck_ci}")
+
     # Try direct query bypass first (skips AI calls for simple requests)
     plan = _try_direct_queries(prompt, deck_info)
     search_spec = None

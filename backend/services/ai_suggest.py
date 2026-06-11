@@ -297,9 +297,11 @@ async def get_suggestions(prompt: str, deck_cards: list = None, deck_info: dict 
         # Only clarify when user hasn't explicitly selected a mode
         clarification = _check_for_clarification(prompt)
         if clarification:
+            print(f"[AI] Category clarifier caught: '{prompt}' -> {clarification.get('clarification_question')}")
             return clarification
         effect_clarification = check_for_effect_clarification(prompt)
         if effect_clarification:
+            print(f"[AI] Effect clarifier caught: '{prompt}' -> {effect_clarification.get('clarification_question')}")
             return effect_clarification
         
 

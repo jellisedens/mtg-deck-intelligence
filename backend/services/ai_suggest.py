@@ -281,8 +281,7 @@ async def get_suggestions(prompt: str, deck_cards: list = None, deck_info: dict 
     Classifies intent and routes to the appropriate prompt builder.
     """
     t_start = time.time()
-    print(f"[AI] Received prompt: '{prompt}' | intent_override: '{intent_override}'")
-
+    
     # Handle vague responses to clarification ("any", "all", "I don't know")
     vague_responses = [
         "any", "all", "all types", "everything", "any type",

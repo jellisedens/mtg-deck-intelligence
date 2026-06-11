@@ -553,6 +553,25 @@ async def _handle_suggest(prompt: str, deck_cards: list, deck_info: dict,
                     })
                 print(f"[AI] EDHREC-first: {len(edhrec_cards_resolved)} cards resolved ({time.time() - t_edhrec:.1f}s)")
 
+    # If direct bypass matched a category, filter EDHREC to relevant cards only
+    if edhrec_cards_resolved and plan.get("direct_bypass") and plan.get("reasoning"):
+        category_oracle_hints = {
+            "ramp": ["add {", "add one mana", "search your library for", "additional land", "mana of any", "treasure token", "cost", "less to cast"],
+            "removal": ["destroy", "exile", "damage", "counter target"],
+            "card draw": ["draw", "cards", "look at the top"],
+            "protection": ["hexproof", "indestructible", "shroud", "protection from", "counter target"],
+            "tokens": ["create", "token"],
+        }
+        for cat, hints in category_oracle_hints.items():
+            if cat in plan.get("reasoning", "").lower():
+                before = len(edhrec_cards_resolved)
+                edhrec_cards_resolved = [
+                    c for c in edhrec_cards_resolved
+                    if any(h in (c.get("oracle_text") or "").lower() for h in hints)
+                ]
+                print(f"[AI] EDHREC category filter ({cat}): {before} -> {len(edhrec_cards_resolved)}")
+                break
+
     # Scryfall search — fills gaps EDHREC doesn't cover
     t_search = time.time()
     search_results = await _execute_searches(

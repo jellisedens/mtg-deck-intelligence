@@ -1182,37 +1182,45 @@ def _try_direct_queries(prompt: str, deck_info: dict = None) -> dict | None:
     default_count = requested_count or 5
 
     # ── Complexity check ─────────────────────────────────────
-    # Strip filler words to measure how specific the request is.
-    # Simple requests (1-2 meaningful words) can be bypassed.
-    # Complex requests (3+ meaningful words) need the AI planner.
-    filler_words = {
-        "suggest", "find", "recommend", "show", "give", "list", "get",
-        "me", "some", "good", "best", "cards", "card", "for", "this",
-        "deck", "please", "can", "you", "i", "need", "want", "more",
-        "a", "the", "my", "in", "of", "to", "and", "or", "with",
-        "new", "add", "spells", "spell", "pieces", "options", "suggestions",
-        "that", "are", "is", "it", "be", "do", "have", "has",
-        "would", "could", "should", "will", "also", "too", "very",
-    }
-    meaningful_words = [w for w in prompt_lower.split() if w not in filler_words and len(w) > 1]
-    is_simple = len(meaningful_words) <= 2
+    # Strip constraints and grammar from prompt to find core intent
+    stripped = prompt_lower
+    # Remove constraint patterns (prices, numbers, comparisons)
+    stripped = re.sub(r'\$\d+(?:\.\d+)?', '', stripped)           # $5, $10.50
+    stripped = re.sub(r'\d+\s*(?:mana|cmc|dollars?)', '', stripped)  # 3 mana, 5 cmc
+    stripped = re.sub(r'(?:cmc|mana)\s*(?:<=?|>=?|=)\s*\d+', '', stripped)  # cmc<=3
+    stripped = re.sub(r'\b\d+\s+or\s+(?:less|more|fewer)\b', '', stripped)  # 3 or less
+    stripped = re.sub(r'\b(?:under|below|above|over|less than|more than|at most|at least|no more than|cheaper than|nothing over)\b', '', stripped)
+    stripped = re.sub(r'\b(?:for|under|below)\s+\$?\d+', '', stripped)  # for $5, under 3
+    stripped = re.sub(r'\$\S+', '', stripped)  # any remaining $tokens
+    stripped = re.sub(r'\b\d+\b', '', stripped)  # any remaining standalone numbers
+    # Remove common grammar glue
+    stripped = re.sub(r'\b(?:suggest|find|recommend|show|give|list|get|need|want|looking|search|me|some|good|best|cards?|spells?|for|this|deck|please|can|you|i|a|the|my|in|of|to|and|or|with|new|add|that|are|is|it|be|do|have|has|would|could|should|will|also|too|very|pieces|options|suggestions)\b', '', stripped)
+    # Clean up whitespace
+    remaining = [w for w in stripped.split() if len(w) > 1]
     
-    # If 2 meaningful words, check they don't span multiple categories
-    if len(meaningful_words) == 2:
-        # Check if both words appear in the same trigger phrase
-        combined = " ".join(meaningful_words)
-        found_in_trigger = False
-        for pattern in PATTERNS.values():
-            for trigger in pattern["triggers"]:
-                if all(w in trigger for w in meaningful_words):
-                    found_in_trigger = True
-                    break
-            if found_in_trigger:
+    # Check if remaining words match any trigger
+    matched_pattern = None
+    matched_trigger = None
+    for pattern_key in priority_order:
+        pattern = PATTERNS[pattern_key]
+        for trigger in pattern["triggers"]:
+            if re.search(rf'\b{re.escape(trigger)}\b', prompt_lower):
+                matched_pattern = pattern_key
+                matched_trigger = trigger
                 break
-        if not found_in_trigger:
-            is_simple = False
+        if matched_pattern:
+            break
     
-    print(f"[AI] Bypass check: meaningful_words={meaningful_words}, is_simple={is_simple}")
+    # If we matched a trigger, check if everything else is just constraints
+    if matched_pattern:
+        # Remove the trigger words from remaining
+        trigger_words = matched_trigger.split()
+        remaining_after_trigger = [w for w in remaining if w not in trigger_words]
+        is_simple = len(remaining_after_trigger) == 0
+        print(f"[AI] Bypass check: trigger='{matched_trigger}', remaining={remaining_after_trigger}, is_simple={is_simple}")
+    else:
+        is_simple = False
+        print(f"[AI] Bypass check: no trigger matched, remaining={remaining}")
     
     # Priority ordering: specific subcategories first
     priority_order = [
@@ -1226,18 +1234,15 @@ def _try_direct_queries(prompt: str, deck_info: dict = None) -> dict | None:
     # Only bypass for simple requests (1-2 meaningful words)
     # "suggest ramp cards" → ["ramp"] → bypass
     # "suggest ramp that synergizes with dragons" → ["ramp", "synergizes", "dragons"] → AI planner
-    if is_simple:
-        for pattern_key in priority_order:
-            pattern = PATTERNS[pattern_key]
-            for trigger in pattern["triggers"]:
-                if re.search(rf'\b{re.escape(trigger)}\b', prompt_lower):
-                    return {
-                        "scryfall_queries": pattern["queries"],
-                        "reasoning": pattern["reasoning"],
-                        "mode": "search",
-                        "direct_bypass": True,
-                        "max_results": default_count,
-                    }
+    if is_simple and matched_pattern:
+        pattern = PATTERNS[matched_pattern]
+        return {
+            "scryfall_queries": pattern["queries"],
+            "reasoning": pattern["reasoning"],
+            "mode": "search",
+            "direct_bypass": True,
+            "max_results": default_count,
+        }
     
     # ── CMC-specific creature requests ───────────────────────
     # "suggest 2-drops" or "need more 3 drops" or "1-drop creatures"

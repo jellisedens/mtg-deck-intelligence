@@ -34,38 +34,40 @@ logger = logging.getLogger(__name__)
 
 def _get_deck_color_identity(deck_info: dict = None, deck_cards: list = None, card_lookup: dict = None) -> list:
     """Get deck's color identity from multiple sources (fallback chain)."""
+    def _valid_ci(ci):
+        """Color identity must be a list of WUBRG letters."""
+        if not ci or not isinstance(ci, list):
+            return False
+        valid = {"W", "U", "B", "R", "G"}
+        return any(c in valid for c in ci)
+
     if deck_info:
         prefs = deck_info.get("preferences") or {}
         ci = prefs.get("color_identity")
-        if ci:
-            print(f"[CI] From preferences: {ci}")
+        if _valid_ci(ci):
             return ci
         profile = deck_info.get("strategy_profile") or {}
         ci = profile.get("color_identity")
-        if ci:
-            print(f"[CI] From strategy_profile: {ci}")
+        if _valid_ci(ci):
             return ci
         edhrec = profile.get("edhrec_profile", {})
         edhrec_ci = edhrec.get("color_identity")
-        if edhrec_ci:
-            print(f"[CI] From edhrec: {edhrec_ci}")
+        if _valid_ci(edhrec_ci):
             return edhrec_ci
     if deck_cards and card_lookup:
         for card in deck_cards:
             if card.board == "commander":
                 card_data = card_lookup.get(card.scryfall_id, {})
                 ci = card_data.get("color_identity")
-                print(f"[CI] From commander card '{card.card_name}': {ci} (type: {type(ci)})")
-                if ci:
+                if _valid_ci(ci):
                     if deck_info:
                         prefs = deck_info.get("preferences") or {}
                         prefs["color_identity"] = ci
                         deck_info["preferences"] = prefs
                         _persist_color_identity(deck_info, ci)
                     return ci
-    print(f"[CI] No color identity found")
+    print(f"[CI] No valid color identity found")
     return []
-
 
 def _persist_color_identity(deck_info: dict, color_identity: list):
     """Save color identity to deck preferences in database."""

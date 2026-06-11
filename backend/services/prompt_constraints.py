@@ -61,6 +61,12 @@ def extract_deterministic_constraints(prompt: str) -> dict:
     if "max_price" not in constraints and "budget" in prompt_lower:
         constraints["max_price"] = 5.0
 
+    # Handle trailing dollar: "5$", "5 $", "10$"
+    if "max_price" not in constraints:
+        trailing_dollar = re.search(r'(\d+(?:\.\d+)?)\s*\$', prompt_lower)
+        if trailing_dollar:
+            constraints["max_price"] = float(trailing_dollar.group(1))
+
     return constraints
 
 

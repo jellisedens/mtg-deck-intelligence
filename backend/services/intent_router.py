@@ -45,7 +45,7 @@ def _ai_classify(prompt: str) -> str:
     system = """Classify this Magic: The Gathering deck question into exactly one category.
 Respond with ONLY one word — no explanation:
 
-suggest — user wants card recommendations or is describing cards they want (e.g., "cards that benefit from lifegain", "trample cards", "equipment that grants flying", "cards that synergize with sacrifice")
+suggest — user wants card recommendations or is describing cards they want (e.g., "cards that benefit from lifegain", "trample cards", "equipment that grants flying", "cards that synergize with sacrifice", "suggest removal", "find removal spells", "recommend removal for artifacts", "removal under 3 mana")
 cuts — user wants to know which cards to REMOVE
 analyze — user wants to understand their deck's strengths and weaknesses
 swap — user wants to REPLACE specific cards with better options

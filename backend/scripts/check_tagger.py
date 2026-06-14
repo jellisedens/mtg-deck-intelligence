@@ -2,30 +2,44 @@ import sys
 sys.path.insert(0, "/app")
 import httpx
 import asyncio
-import json
 
 async def check():
     async with httpx.AsyncClient() as client:
-        r = await client.get("https://api.scryfall.com/cards/named?exact=Sol+Ring", timeout=10)
-        data = r.json()
-        
-        print("=== Card Fields ===")
-        print(f"Keywords: {data.get('keywords', [])}")
-        print(f"Produced mana: {data.get('produced_mana', [])}")
-        print(f"EDHREC rank: {data.get('edhrec_rank')}")
-        
-        related = data.get("related_uris", {})
-        for k, v in related.items():
-            print(f"Related: {k} = {v}")
+        tags = [
+            # Already confirmed
+            "ramp", "removal", "board-wipe", "boardwipe", "counter",
+            "draw", "card-advantage", "cantrip", "lifegain", "protection",
+            "evasion", "tutor", "sacrifice-outlet", "recursion", "reanimate",
+            "graveyard-hate", "mana-dork", "mana-rock", "land-ramp",
+            # New from catalog
+            "anthem", "combat-trick", "pump", "blink", "flicker",
+            "bounce", "fog", "goad", "damage-doubler", "damage-multiplier",
+            "damage-tripler", "extra-turn", "extra-combat-phase", "extra-land",
+            "death-trigger", "attack-trigger", "enchantress", "cost-reducer",
+            "drain-life", "burn", "alternate-win-condition", "mill", "discard",
+            "group-hug", "group-slug", "freeze", "hatebear", "grows",
+            "free-sac-outlet", "counterspell", "disenchant",
+            "creature-removal", "artifact-removal", "enchantment-removal",
+            "spot-removal", "mass-removal",
+            "graveyard-fuel", "exile", "donate",
+            "copy", "clone", "steal", "gating",
+            "extra-untap", "animate", "flicker-creature",
+            "wheel", "loot", "impulse-draw",
+        ]
 
-        # Try tagger tags endpoint
-        print("\n=== Tagger API ===")
-        card_id = data.get("id")
-        tagger_url = f"https://api.scryfall.com/cards/{card_id}"
-        r2 = await client.get(tagger_url, timeout=10)
-        d2 = r2.json()
-        for key in ["card_faces", "all_parts", "keywords", "type_line"]:
-            if key in d2:
-                print(f"{key}: {d2[key]}")
+        working = []
+        for tag in tags:
+            r = await client.get(
+                f"https://api.scryfall.com/cards/search?q=otag:{tag}+f:commander",
+                timeout=10,
+            )
+            if r.status_code == 200:
+                total = r.json().get("total_cards", 0)
+                working.append({"tag": tag, "count": total})
+            await asyncio.sleep(0.1)
+
+        print(f"=== {len(working)} WORKING TAGS ===")
+        for t in sorted(working, key=lambda x: x["count"], reverse=True):
+            print(f"  otag:{t['tag']}: {t['count']}")
 
 asyncio.run(check())

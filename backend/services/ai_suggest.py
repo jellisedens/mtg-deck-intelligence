@@ -561,21 +561,44 @@ async def _handle_suggest(prompt: str, deck_cards: list, deck_info: dict,
 
     # If direct bypass matched a category, filter EDHREC to relevant cards only
     if edhrec_cards_resolved and plan.get("direct_bypass") and plan.get("reasoning"):
-        category_oracle_hints = {
-            "ramp": ["add {", "add one mana", "search your library for", "additional land", "mana of any", "treasure token", "cost", "less to cast"],
-            "removal": ["destroy", "exile", "damage", "counter target"],
-            "card draw": ["draw", "cards", "look at the top"],
-            "protection": ["hexproof", "indestructible", "shroud", "protection from", "counter target"],
-            "tokens": ["create", "token"],
+        category_tag_map = {
+            "ramp": ["ramp", "mana-rock", "mana-dork", "land-ramp", "cost-reducer"],
+            "removal": ["removal", "spot-removal", "board-wipe", "creature-removal"],
+            "card draw": ["draw", "cantrip", "impulse-draw", "card-advantage"],
+            "protection": ["protection", "evasion"],
+            "lifegain": ["lifegain", "drain-life"],
+            "recursion": ["recursion", "reanimate"],
+            "sacrifice": ["sacrifice-outlet", "death-trigger", "free-sac-outlet"],
+            "blink": ["blink", "flicker"],
+            "counterspell": ["counterspell", "counter"],
+            "burn": ["burn"],
+            "mill": ["mill"],
         }
-        for cat, hints in category_oracle_hints.items():
+        for cat, tags in category_tag_map.items():
             if cat in plan.get("reasoning", "").lower():
-                before = len(edhrec_cards_resolved)
-                edhrec_cards_resolved = [
-                    c for c in edhrec_cards_resolved
-                    if any(h in (c.get("oracle_text") or "").lower() for h in hints)
-                ]
-                print(f"[AI] EDHREC category filter ({cat}): {before} -> {len(edhrec_cards_resolved)}")
+                # Filter EDHREC cards: keep those whose oracle text matches tag patterns
+                # Until Phase 2 (tag EDHREC cards), use oracle text as proxy
+                tag_oracle_hints = {
+                    "ramp": ["add {", "add one mana", "search your library", "mana of any", "treasure", "cost", "less to cast"],
+                    "removal": ["destroy", "exile", "deals", "damage to"],
+                    "card draw": ["draw"],
+                    "protection": ["hexproof", "indestructible", "shroud", "protection from"],
+                    "lifegain": ["gain", "life"],
+                    "recursion": ["return", "graveyard"],
+                    "sacrifice": ["sacrifice", "dies", "death"],
+                    "blink": ["exile", "return", "battlefield"],
+                    "counterspell": ["counter target"],
+                    "burn": ["damage", "deals"],
+                    "mill": ["mill", "library", "into their graveyard"],
+                }
+                hints = tag_oracle_hints.get(cat, [])
+                if hints:
+                    before = len(edhrec_cards_resolved)
+                    edhrec_cards_resolved = [
+                        c for c in edhrec_cards_resolved
+                        if any(h in (c.get("oracle_text") or "").lower() for h in hints)
+                    ]
+                    print(f"[AI] EDHREC category filter ({cat}): {before} -> {len(edhrec_cards_resolved)}")
                 break
 
     # Scryfall search — fills gaps EDHREC doesn't cover
@@ -1030,44 +1053,37 @@ def _try_direct_queries(prompt: str, deck_info: dict = None) -> dict | None:
                 "mana ramp", "more mana",
             ],
             "queries": [
-                f"t:creature o:\"{{T}}: Add\"{base} cmc<=3",           # mana dorks
-                f"t:artifact o:\"{{T}}: Add\"{base} cmc<=3",           # mana rocks
-                f"o:\"search your library\" o:land t:sorcery{base}",   # land search
-                f"o:\"additional land\"{base}",                         # extra land drops
-                f"o:\"cost\" o:\"less to cast\"{base}",                # cost reducers
-                f"o:\"create\" o:\"Treasure\"{base}",                  # treasure makers
+                f"otag:ramp{base}",
+                f"otag:mana-rock{base} cmc<=3",
+                f"otag:land-ramp{base}",
             ],
             "reasoning": "Direct match: ramp (all subcategories)",
         },
         "mana_dorks": {
             "triggers": ["mana dork", "mana dorks", "dorks"],
             "queries": [
-                f"t:creature o:\"{{T}}: Add\"{base} cmc<=2",
-                f"t:creature o:\"{{T}}: Add\"{base} cmc=3",
+                f"otag:mana-dork{base}",
             ],
             "reasoning": "Direct match: mana dorks specifically",
         },
         "mana_rocks": {
             "triggers": ["mana rock", "mana rocks", "rocks", "artifacts that produce mana"],
             "queries": [
-                f"t:artifact o:\"{{T}}: Add\"{base} cmc<=2",
-                f"t:artifact o:\"{{T}}: Add\"{base} cmc=3",
+                f"otag:mana-rock{base}",
             ],
             "reasoning": "Direct match: mana rocks specifically",
         },
         "land_ramp": {
             "triggers": ["land ramp", "land search", "fetch lands", "ramp spells"],
             "queries": [
-                f"o:\"search your library\" o:land t:sorcery{base}",
-                f"o:\"put\" o:land o:\"onto the battlefield\"{base}",
+                f"otag:land-ramp{base}",
             ],
             "reasoning": "Direct match: land-based ramp",
         },
         "cost_reducers": {
             "triggers": ["cost reducer", "cost reducers", "medallion", "medallions", "make spells cheaper"],
             "queries": [
-                f"o:\"cost\" o:\"less to cast\"{base}",
-                f"o:\"spells you cast cost\"{base}",
+                f"otag:cost-reducer{base}",
             ],
             "reasoning": "Direct match: cost reduction effects",
         },
@@ -1077,29 +1093,39 @@ def _try_direct_queries(prompt: str, deck_info: dict = None) -> dict | None:
                 "removal spells", "interaction",
             ],
             "queries": [
-                f"o:\"destroy target\" (t:instant or t:sorcery){base}",
-                f"o:\"exile target\" (t:instant or t:sorcery){base}",
-                f"o:\"destroy all\" (t:instant or t:sorcery){base}",   # board wipes
-                f"o:\"deals\" o:\"damage to\" t:instant{base}",        # damage removal
+                f"otag:removal{base}",
+                f"otag:spot-removal{base}",
+                f"otag:board-wipe{base}",
             ],
             "reasoning": "Direct match: removal (all subcategories)",
         },
         "spot_removal": {
             "triggers": ["spot removal", "targeted removal", "single target removal"],
             "queries": [
-                f"o:\"destroy target\" (t:instant or t:sorcery){base}",
-                f"o:\"exile target\" (t:instant or t:sorcery){base}",
+                f"otag:spot-removal{base}",
             ],
             "reasoning": "Direct match: spot removal",
         },
         "board_wipes": {
             "triggers": ["board wipe", "board wipes", "sweeper", "sweepers", "wrath", "wraths"],
             "queries": [
-                f"o:\"destroy all creatures\"{base}",
-                f"o:\"all creatures get\" o:\"-\" (t:instant or t:sorcery){base}",
-                f"o:\"exile all\" (t:instant or t:sorcery){base}",
+                f"otag:board-wipe{base}",
             ],
             "reasoning": "Direct match: board wipes",
+        },
+        "artifact_removal": {
+            "triggers": ["artifact removal", "destroy artifacts", "remove artifacts"],
+            "queries": [
+                f"otag:artifact-removal{base}",
+            ],
+            "reasoning": "Direct match: artifact removal",
+        },
+        "enchantment_removal": {
+            "triggers": ["enchantment removal", "destroy enchantments", "remove enchantments"],
+            "queries": [
+                f"otag:enchantment-removal{base}",
+            ],
+            "reasoning": "Direct match: enchantment removal",
         },
         "card_draw": {
             "triggers": [
@@ -1107,11 +1133,24 @@ def _try_direct_queries(prompt: str, deck_info: dict = None) -> dict | None:
                 "card advantage", "draw spells",
             ],
             "queries": [
-                f"o:\"draw\" t:enchantment{base}",
-                f"o:\"draw\" (t:instant or t:sorcery){base}",
-                f"o:\"draw\" t:creature{base}",
+                f"otag:draw{base}",
+                f"otag:impulse-draw{base}",
             ],
             "reasoning": "Direct match: card draw (all types)",
+        },
+        "cantrips": {
+            "triggers": ["cantrip", "cantrips"],
+            "queries": [
+                f"otag:cantrip{base}",
+            ],
+            "reasoning": "Direct match: cantrips",
+        },
+        "wheel": {
+            "triggers": ["wheel", "wheels", "wheel effect"],
+            "queries": [
+                f"otag:wheel{base}",
+            ],
+            "reasoning": "Direct match: wheel effects",
         },
         "creatures": {
             "triggers": ["creatures", "creature", "suggest creatures"],
@@ -1130,29 +1169,32 @@ def _try_direct_queries(prompt: str, deck_info: dict = None) -> dict | None:
         "protection": {
             "triggers": [
                 "protection", "protect", "hexproof", "indestructible",
-                "counterspell", "counterspells", "counter",
             ],
             "queries": [
-                f"o:\"hexproof\" (t:instant or t:artifact or t:equipment){base}",
-                f"o:\"indestructible\" (t:instant or t:artifact){base}",
-                f"o:\"counter target\" t:instant{base}",
+                f"otag:protection{base}",
+                f"otag:evasion{base}",
             ],
             "reasoning": "Direct match: protection effects",
+        },
+        "counterspells": {
+            "triggers": ["counterspell", "counterspells", "counter", "counter spell"],
+            "queries": [
+                f"otag:counterspell{base}",
+            ],
+            "reasoning": "Direct match: counterspells",
         },
         "tutors": {
             "triggers": ["tutor", "tutors", "search library"],
             "queries": [
-                f"o:\"search your library\" (t:instant or t:sorcery){base}",
-                f"o:\"search your library\" t:creature{base}",
+                f"otag:tutor{base}",
             ],
             "reasoning": "Direct match: tutor effects",
         },
         "tokens": {
             "triggers": ["tokens", "token", "token generators", "token maker"],
             "queries": [
-                f"o:\"create\" o:\"token\" t:creature{base}",
-                f"o:\"create\" o:\"token\" t:enchantment{base}",
-                f"o:\"create\" o:\"token\" (t:instant or t:sorcery){base}",
+                f"otag:anthem{base}",
+                f"t:creature o:\"create\" o:\"token\"{base}",
             ],
             "reasoning": "Direct match: token generation",
         },
@@ -1162,16 +1204,16 @@ def _try_direct_queries(prompt: str, deck_info: dict = None) -> dict | None:
                 "return from graveyard", "graveyard recursion",
             ],
             "queries": [
-                f"o:\"return\" o:\"from your graveyard\" (t:instant or t:sorcery){base}",
-                f"o:\"return\" o:\"graveyard to the battlefield\"{base}",
+                f"otag:recursion{base}",
+                f"otag:reanimate{base}",
             ],
             "reasoning": "Direct match: graveyard recursion",
         },
         "sacrifice": {
             "triggers": ["sacrifice", "sac outlet", "sac outlets", "aristocrats"],
             "queries": [
-                f"o:\"sacrifice\" o:\"whenever\"{base}",
-                f"o:\"whenever\" o:\"dies\"{base}",
+                f"otag:sacrifice-outlet{base}",
+                f"otag:death-trigger{base}",
             ],
             "reasoning": "Direct match: sacrifice/aristocrats",
         },
@@ -1188,6 +1230,85 @@ def _try_direct_queries(prompt: str, deck_info: dict = None) -> dict | None:
                 f"t:enchantment{base}",
             ],
             "reasoning": "Direct match: enchantments",
+        },
+        "lifegain": {
+            "triggers": ["lifegain", "life gain", "gain life"],
+            "queries": [
+                f"otag:lifegain{base}",
+            ],
+            "reasoning": "Direct match: lifegain",
+        },
+        "blink": {
+            "triggers": ["blink", "flicker", "blinking"],
+            "queries": [
+                f"otag:blink{base}",
+            ],
+            "reasoning": "Direct match: blink/flicker effects",
+        },
+        "mill": {
+            "triggers": ["mill", "milling"],
+            "queries": [
+                f"otag:mill{base}",
+            ],
+            "reasoning": "Direct match: mill effects",
+        },
+        "discard": {
+            "triggers": ["discard", "hand disruption", "hand attack"],
+            "queries": [
+                f"otag:discard{base}",
+            ],
+            "reasoning": "Direct match: discard effects",
+        },
+        "burn": {
+            "triggers": ["burn", "direct damage", "burn spells"],
+            "queries": [
+                f"otag:burn{base}",
+            ],
+            "reasoning": "Direct match: burn/damage spells",
+        },
+        "clone": {
+            "triggers": ["clone", "clones", "copy"],
+            "queries": [
+                f"otag:clone{base}",
+                f"otag:copy{base}",
+            ],
+            "reasoning": "Direct match: clone/copy effects",
+        },
+        "extra_turns": {
+            "triggers": ["extra turn", "extra turns", "take another turn"],
+            "queries": [
+                f"otag:extra-turn{base}",
+            ],
+            "reasoning": "Direct match: extra turn effects",
+        },
+        "extra_combats": {
+            "triggers": ["extra combat", "extra combats", "additional combat"],
+            "queries": [
+                f"otag:extra-combat-phase{base}",
+            ],
+            "reasoning": "Direct match: extra combat phases",
+        },
+        "damage_doublers": {
+            "triggers": ["damage doubler", "damage doublers", "double damage"],
+            "queries": [
+                f"otag:damage-doubler{base}",
+            ],
+            "reasoning": "Direct match: damage doublers",
+        },
+        "group_slug": {
+            "triggers": ["group slug", "punisher", "slug"],
+            "queries": [
+                f"otag:group-slug{base}",
+            ],
+            "reasoning": "Direct match: group slug effects",
+        },
+        "stax": {
+            "triggers": ["stax", "tax", "hatebear", "hatebears"],
+            "queries": [
+                f"otag:hatebear{base}",
+                f"otag:freeze{base}",
+            ],
+            "reasoning": "Direct match: stax/tax effects",
         },
     }
     
@@ -1225,9 +1346,17 @@ def _try_direct_queries(prompt: str, deck_info: dict = None) -> dict | None:
     
     # Priority ordering: specific subcategories first
     priority_order = [
-        "mana_dorks", "mana_rocks", "land_ramp", "cost_reducers",   # ramp subs
-        "spot_removal", "board_wipes",                                # removal subs
-        "ramp", "removal", "card_draw",                               # broad categories
+        # Ramp subcategories
+        "mana_dorks", "mana_rocks", "land_ramp", "cost_reducers",
+        # Removal subcategories
+        "spot_removal", "board_wipes", "artifact_removal", "enchantment_removal",
+        # Broad categories
+        "ramp", "removal", "card_draw", "counterspells",
+        # Specific strategies
+        "lifegain", "blink", "mill", "discard", "burn", "clone",
+        "extra_turns", "extra_combats", "damage_doublers",
+        "group_slug", "stax", "cantrips", "wheel",
+        # Card types
         "creatures", "lands", "protection", "tutors", "tokens",
         "recursion", "sacrifice", "equipment", "enchantments",
     ]

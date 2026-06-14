@@ -291,7 +291,13 @@ async def get_suggestions(prompt: str, deck_cards: list = None, deck_info: dict 
         "idk", "whatever", "surprise me", "all of them",
         "don't know", "no preference",
     ]
-    if prompt.lower().strip() in vague_responses:
+    # Check for vague/catch-all responses (exact or substring)
+    vague_phrases = ["mix of everything", "all of the above", "bit of everything", "show me all", "everything related"]
+    is_vague = (
+        prompt.lower().strip() in vague_responses
+        or any(phrase in prompt.lower() for phrase in vague_phrases)
+    )
+    if is_vague:
         prompt = "suggest cards for this deck"
         print(f"[AI] Vague clarification response detected, rewritten to: '{prompt}'")
     elif not intent_override:
@@ -1213,7 +1219,7 @@ def _try_direct_queries(prompt: str, deck_info: dict = None) -> dict | None:
     stripped = re.sub(r'\$\S+', '', stripped)  # any remaining $tokens
     stripped = re.sub(r'\b\d+\b', '', stripped)  # any remaining standalone numbers
     # Remove common grammar glue
-    stripped = re.sub(r'\b(?:suggest|find|recommend|show|give|list|get|need|want|looking|search|me|some|good|best|cards?|spells?|for|this|deck|please|can|you|i|a|the|my|in|of|to|and|or|with|new|add|that|are|is|it|be|do|have|has|would|could|should|will|also|too|very|pieces|options|suggestions)\b', '', stripped)
+    stripped = re.sub(r'\b(?:suggest|find|recommend|show|give|list|get|need|want|looking|search|me|some|good|best|cards?|spells?|for|this|deck|please|can|you|i|a|the|my|in|of|to|and|or|with|new|add|that|are|is|it|be|do|have|has|would|could|should|will|also|too|very|pieces|options|suggestions|any|more)\b', '', stripped)
     # Clean up whitespace
     remaining = [w for w in stripped.split() if len(w) > 1]
     

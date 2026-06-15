@@ -63,7 +63,11 @@ export default function CardSearch({ onAddCard, disabled }: Props) {
     try {
       const results = await searchCards(`!"${cardName}"`);
       if (results.length > 0) {
-        onAddCard(results[0]);
+        // Prefer exact name match over double-faced cards
+        const exactMatch = results.find(
+          (c) => c.name.toLowerCase() === cardName.toLowerCase()
+        );
+        onAddCard(exactMatch || results[0]);
       }
     } catch {
       // silently fail — card search didn't return results

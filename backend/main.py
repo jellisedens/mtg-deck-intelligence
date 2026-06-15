@@ -50,6 +50,17 @@ app.include_router(versions_router)
 app.include_router(admin_router)
 app.include_router(wizard_router)
 
+@app.on_event("startup")
+async def load_tag_index():
+    """Load Scryfall oracle tag index on startup."""
+    try:
+        from services.tag_index import download_and_build_index, is_index_loaded
+        if not is_index_loaded():
+            await download_and_build_index()
+    except Exception as e:
+        print(f"[STARTUP] Tag index load failed (non-fatal): {e}")
+
+
 @app.get("/")
 def root():
     return {"message": "MTG Deck Intelligence API", "docs": "/docs"}

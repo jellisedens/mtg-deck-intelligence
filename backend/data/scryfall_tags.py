@@ -1,153 +1,261 @@
-# Scryfall Tagger Tags — Working Reference
-# Last verified: June 2026
-# Use with otag: prefix in Scryfall search (e.g., otag:ramp f:commander)
+"""
+Scryfall Oracle Tags — Production Reference
+Built from bulk Oracle Tags file (17MB, 35,547 cards, 4,348 unique tags)
+Last verified: June 2026
 
-SCRYFALL_TAGS = {
-    # === RAMP (2051+ cards) ===
-    "ramp": 2051,           # All ramp
-    "mana-dork": 394,       # Creatures that tap for mana
-    "mana-rock": 340,       # Artifacts that produce mana
-    "land-ramp": 572,       # Spells that search for lands
-    "cost-reducer": 281,    # Cards that reduce spell costs
+Usage:
+  1. Download oracle tags bulk file -> build oracle_id -> [tags] index
+  2. AI classifies user prompt -> returns category keys
+  3. Match category keys to tag groups below
+  4. Filter cards by matching tags
+  5. Oracle text fallback for untagged cards
+"""
 
-    # === REMOVAL (6008+ cards) ===
-    "removal": 6008,        # All removal
-    "creature-removal": 5122,
-    "spot-removal": 4556,
-    "artifact-removal": 1088,
-    "enchantment-removal": 954,
-    "board-wipe": 884,      # Same as boardwipe and mass-removal
-    "disenchant": 215,      # Artifact + enchantment removal
-    "burn": 2794,           # Damage-based removal
+# Maps user-facing categories to actual bulk file tag names
+# Built from real card data analysis, not guesswork
+CATEGORY_TAG_GROUPS = {
+    # === RAMP ===
+    "ramp": [
+        "ramp", "ramp with set's mechanic",
+        "mana rock", "mana rock with set's mechanic", "utility mana rock",
+        "mana dork", "mana dork egg", "mana egg",
+        "land ramp", "multi land ramp",
+        "adds multiple mana",
+        "mana producer", "mana increaser", "mana storage",
+        "mana filter", "mana fix",
+        "repeatable treasures",
+    ],
+    "mana_rocks": [
+        "mana rock", "mana rock with set's mechanic", "utility mana rock",
+    ],
+    "mana_dorks": [
+        "mana dork", "mana dork egg",
+    ],
+    "land_ramp": [
+        "land ramp", "multi land ramp",
+        "tutor-land-basic", "tutor-land-to-battlefield",
+    ],
+    "cost_reducers": [
+        "cost-reducer-colored-mana",
+    ],
 
-    # === CARD DRAW (3831+ cards) ===
-    "draw": 3831,           # All draw effects
-    "card-advantage": 5545, # Broader: includes draw + other advantage
-    "cantrip": 581,         # Cheap spells that replace themselves
-    "impulse-draw": 229,    # Exile top and cast
-    "loot": 361,            # Draw then discard
-    "wheel": 126,           # Discard hand, draw new
+    # === REMOVAL ===
+    "removal": [
+        "spot removal", "repeatable removal", "multi removal", "swap removal",
+        "removal-exile", "removal-destroy", "removal-bounce", "removal-tuck",
+        "removal-creature", "removal-permanent", "removal-nonland",
+        "removal-artifact", "removal-enchantment", "removal-planeswalker",
+        "removal-land", "removal-noncreature", "removal-token",
+        "removal-sacrifice", "removal-toughness", "removal-fight",
+        "removal-aura", "removal-equipment", "removal-vehicle",
+        "removal-battle", "removal-nonenchantment",
+    ],
+    "spot_removal": [
+        "spot removal", "removal-exile", "removal-destroy",
+        "removal-creature", "removal-permanent",
+        "single target instant/sorcery",
+    ],
+    "board_wipe": [
+        "sweeper", "sweeper-one-sided", "sweeper-graveyard",
+        "board-reset", "counterspell-sweeper",
+    ],
+    "artifact_removal": [
+        "removal-artifact",
+    ],
+    "enchantment_removal": [
+        "removal-enchantment", "removal-aura",
+    ],
 
-    # === INTERACTION (511+ cards) ===
-    "counter": 511,         # Same as counterspell
-    "counterspell": 511,
-    "bounce": 863,          # Return to hand
-    "freeze": 188,          # Tap and don't untap
+    # === CARD DRAW ===
+    "draw": [
+        "draw engine", "repeatable pure draw", "pure draw", "burst draw",
+        "repeatable draw", "repeatable impulsive draw", "impulsive draw",
+        "long term impulsive draw", "extra draw step",
+        "hand-positive", "hand-neutral", "egg",
+        "drawlink", "gives drawlink",
+        "life for cards",
+    ],
+    "cantrip": [
+        "pure draw", "hand-neutral", "egg",
+    ],
+    "impulse_draw": [
+        "impulsive draw", "repeatable impulsive draw", "long term impulsive draw",
+    ],
+    "wheel": [
+        "draw to seven",
+    ],
+    "loot": [
+        "repeatable draw",
+    ],
 
-    # === LIFEGAIN (2356 cards) ===
-    "lifegain": 2356,
-    "drain-life": 356,      # Opponent loses, you gain
+    # === INTERACTION ===
+    "counterspell": [
+        "counterspell", "counterspell with set mechanic",
+        "counterspell-noncreature", "counterspell-creature",
+        "counterspell-instant", "counterspell-sorcery",
+        "counterspell-enchantment", "counterspell-artifact",
+        "counterspell-planeswalker", "counterspell-aura",
+        "counterspell-battle",
+        "counterspell-free", "counterspell-soft",
+        "counterspell-bounce", "counterspell-exile",
+        "counterspell-sacrifice", "counterspell-tuck",
+        "counterspell-reusable", "counterspell-automatic",
+        "counterspell-loyalty-ability", "counterspell-ability",
+    ],
+    "bounce": [
+        "removal-bounce",
+    ],
 
-    # === PROTECTION (1218 cards) ===
-    "protection": 1218,
-    "evasion": 4820,        # Can't be blocked
-    "fog": 91,              # Prevent combat damage
-    "hatebear": 53,         # Small creatures that disrupt
+    # === PROTECTION ===
+    "protection": [
+        "protects-creature", "protects-permanent", "protects-all",
+        "protects-land", "protects-artifact", "protects-enchantment",
+        "protects-planeswalker", "protects-nonland", "protects-vehicle",
+        "gives hexproof", "gives indestructible", "gives shroud",
+        "gives protection", "gives ward",
+        "gives player hexproof", "gives player protection", "gives player shroud",
+        "wrath-protection",
+        "circle of protection",
+    ],
+    "evasion": [
+        "gives flying", "gives trample", "gives menace",
+        "gives unblockable", "gives skulk", "gives shadow",
+        "gives horsemanship", "gives fear", "gives intimidate",
+        "gives forestwalk", "gives islandwalk", "gives mountainwalk",
+        "gives plainswalk", "gives swampwalk", "gives landwalk",
+        "gives evasion", "evasion",
+    ],
+    "haste_enabler": [
+        "gives haste", "gives super haste",
+    ],
+    "flash_enabler": [
+        "gives flash",
+    ],
 
-    # === GRAVEYARD (2066+ cards) ===
-    "recursion": 2066,      # Return from graveyard
-    "reanimate": 939,       # Put creatures from GY to battlefield
-    "graveyard-fuel": 430,  # Put cards into graveyard
-    "graveyard-hate": 405,  # Exile graveyards
-    "death-trigger": 1482,  # When a creature dies
+    # === LIFEGAIN ===
+    "lifegain": [
+        "lifegain", "repeatable lifegain", "soul warden ability",
+        "gives lifelink", "gains lifelink", "old lifelink",
+        "lifegain increaser", "life doubler",
+        "opponent lifegain",
+    ],
+    "lifegain_payoff": [
+        "lifegain matters", "pridemate", "super-pridemate",
+        "life-total-matters-self", "lifegain to damage",
+    ],
+    "drain": [
+        "blood artist ability",
+    ],
 
-    # === SACRIFICE (1360+ cards) ===
-    "sacrifice-outlet": 1360,
-    "free-sac-outlet": 174, # No mana cost to sacrifice
+    # === GRAVEYARD ===
+    "recursion": [
+        "mass reanimation",
+    ],
+    "graveyard_hate": [
+        "sweeper-graveyard",
+    ],
 
-    # === TUTOR (1080 cards) ===
-    "tutor": 1080,
+    # === SACRIFICE ===
+    "sacrifice": [
+        "sacrifice outlet", "sacrifice outlet-creature",
+        "sacrifice outlet-artifact", "sacrifice outlet-enchantment",
+        "sacrifice outlet-land", "sacrifice outlet-permanent",
+        "sacrifice outlet-planeswalker", "sacrifice outlet-token",
+        "sacrifice outlet-nonland",
+        "free sacrifice outlet", "repeatable sacrifice outlet",
+    ],
+    "death_triggers": [
+        "death trigger", "death trigger-self", "death trigger opponent",
+        "blood artist ability", "grave pact",
+    ],
 
-    # === TOKENS / CREATURES ===
-    "anthem": 390,          # +1/+1 to all your creatures
-    "combat-trick": 973,    # Instant-speed combat buffs
-    "animate": 578,         # Turn noncreatures into creatures
-    "clone": 67,            # Copy creatures
-    "copy": 885,            # Copy spells/permanents
+    # === TUTOR ===
+    "tutor": [
+        "tutor-card", "tutor-to-hand", "tutor-to-top",
+        "tutor-to-battlefield", "tutor-to-graveyard", "tutor-to-exile",
+        "tutor-creature", "tutor-artifact", "tutor-enchantment",
+        "tutor-instant", "tutor-sorcery", "tutor-planeswalker",
+        "tutor-land-any", "tutor-land-basic",
+        "tutor-land-to-battlefield",
+        "tutor-artifact-equipment", "tutor-enchantment-aura",
+        "tutor-legendary", "tutor-permanent", "tutor-nonland",
+        "tutor-noncreature", "tutor-self",
+        "tutor-cast", "tutor-flash",
+    ],
 
-    # === BLINK (163 cards) ===
-    "blink": 163,           # Same as flicker
-    "flicker": 163,
-    "flicker-creature": 132,
+    # === TOKENS ===
+    "tokens": [
+        "repeatable creature tokens",
+    ],
+    "anthem": [
+        "gives pp counters to all", "gives pp counters",
+    ],
 
-    # === MILL / DISCARD ===
-    "mill": 1153,
-    "discard": 536,
+    # === COMBAT ===
+    "combat_trick": [
+        "combat trick",
+    ],
+    "attack_triggers": [
+        "attack trigger", "attacking matters-self",
+    ],
 
     # === MULTIPLAYER ===
-    "group-slug": 721,      # Everyone takes damage/punishment
-    "group-hug": 373,       # Everyone benefits
-    "goad": None,           # Not confirmed but likely works via otag
+    "group_slug": [
+        "group slug",
+    ],
 
-    # === EXTRA RESOURCES ===
-    "extra-land": 148,      # Play additional lands
-    "extra-turn": 52,
-    "extra-combat-phase": 43,
-    "extra-untap": 94,
+    # === STAX ===
+    "stax": [
+        "hatebear", "cast tax", "silence",
+        "prevent activation", "hate-flash",
+        "kismet effect",
+    ],
 
-    # === DAMAGE MULTIPLIERS ===
-    "damage-doubler": 44,
-    "damage-multiplier": 44,
-    "damage-tripler": 44,
-
-    # === OTHER ===
-    "attack-trigger": 1908,
-    "enchantress": 16,      # Draw when playing enchantments
-    "donate": 64,           # Give permanents to opponents
-    "alternate-win-condition": 59,
-    "gating": 13,           # Return permanent to hand on ETB
+    # === BURN ===
+    "burn": [
+        "burn any", "burn creature", "burn player", "burn planeswalker",
+        "bombard",
+    ],
 }
 
-# === CATEGORY MAPPING ===
-# Maps user-facing categories to their otag queries
-CATEGORY_TO_TAGS = {
-    "ramp": ["ramp"],
-    "mana_dorks": ["mana-dork"],
-    "mana_rocks": ["mana-rock"],
-    "land_ramp": ["land-ramp"],
-    "cost_reducers": ["cost-reducer"],
-    "removal": ["removal"],
-    "spot_removal": ["spot-removal"],
-    "board_wipes": ["board-wipe"],
-    "artifact_removal": ["artifact-removal"],
-    "enchantment_removal": ["enchantment-removal"],
-    "card_draw": ["draw"],
-    "cantrips": ["cantrip"],
-    "impulse_draw": ["impulse-draw"],
-    "wheel": ["wheel"],
-    "loot": ["loot"],
-    "counterspells": ["counterspell"],
-    "bounce": ["bounce"],
-    "lifegain": ["lifegain"],
-    "drain": ["drain-life"],
-    "protection": ["protection"],
-    "evasion": ["evasion"],
-    "fog": ["fog"],
-    "tutor": ["tutor"],
-    "recursion": ["recursion"],
-    "reanimate": ["reanimate"],
-    "graveyard_hate": ["graveyard-hate"],
-    "sacrifice": ["sacrifice-outlet"],
-    "free_sac": ["free-sac-outlet"],
-    "death_triggers": ["death-trigger"],
-    "attack_triggers": ["attack-trigger"],
-    "anthem": ["anthem"],
-    "combat_tricks": ["combat-trick"],
-    "blink": ["blink"],
-    "clone": ["clone"],
-    "copy": ["copy"],
-    "mill": ["mill"],
-    "discard": ["discard"],
-    "group_slug": ["group-slug"],
-    "group_hug": ["group-hug"],
-    "extra_lands": ["extra-land"],
-    "extra_turns": ["extra-turn"],
-    "extra_combats": ["extra-combat-phase"],
-    "damage_doublers": ["damage-doubler"],
-    "burn": ["burn"],
-    "enchantress": ["enchantress"],
-    "alternate_wincon": ["alternate-win-condition"],
-    "hatebear": ["hatebear"],
-    "animate": ["animate"],
-    "freeze": ["freeze"],
+# Oracle text fallback patterns for cards without tags
+ORACLE_FALLBACKS = {
+    "ramp": ["{T}: Add {C}{C}", "{T}: Add {", "search your library for a basic land", "additional land", "add one mana", "add two mana", "add three mana"],
+    "mana_rocks": ["add {", "{T}: Add"],
+    "mana_dorks": ["add {", "{T}: Add"],
+    "land_ramp": ["search your library for a basic land", "land onto the battlefield"],
+    "cost_reducers": ["cost", "less to cast", "costs {"],
+    "removal": ["destroy target", "exile target", "deals damage to target"],
+    "spot_removal": ["destroy target", "exile target"],
+    "board_wipe": ["destroy all", "exile all", "all creatures get -", "each creature gets -"],
+    "artifact_removal": ["destroy target artifact", "exile target artifact"],
+    "enchantment_removal": ["destroy target enchantment", "exile target enchantment"],
+    "draw": ["draw a card", "draw cards", "draw two", "draw three"],
+    "cantrip": ["draw a card"],
+    "impulse_draw": ["exile the top", "you may play", "you may cast"],
+    "wheel": ["each player discards", "discard your hand"],
+    "counterspell": ["counter target spell", "counter target"],
+    "bounce": ["return target", "to its owner's hand"],
+    "protection": ["hexproof", "indestructible", "shroud", "protection from"],
+    "evasion": ["can't be blocked", "flying", "trample", "menace"],
+    "haste_enabler": ["haste"],
+    "flash_enabler": ["flash", "as though they had flash"],
+    "lifegain": ["gain life", "gains life", "lifelink"],
+    "lifegain_payoff": ["whenever you gain life", "life you gained"],
+    "drain": ["each opponent loses", "opponent loses life"],
+    "sacrifice": ["sacrifice a creature", "sacrifice a permanent", "sacrifice another"],
+    "death_triggers": ["when", "dies", "whenever a creature dies"],
+    "tutor": ["search your library"],
+    "tokens": ["create a", "token", "create"],
+    "anthem": ["creatures you control get +"],
+    "burn": ["deals damage", "damage to any target", "damage to target"],
+    "stax": ["can't", "don't untap", "costs more to cast"],
+    "group_slug": ["each player", "each opponent", "deals damage to each"],
+    "recursion": ["return target", "from your graveyard", "to the battlefield"],
+    "graveyard_hate": ["exile target card from a graveyard", "exile all cards from"],
+    "attack_triggers": ["whenever", "attacks"],
+    "combat_trick": ["gets +", "until end of turn"],
 }
+
+# Categories available for the AI classifier
+AVAILABLE_CATEGORIES = list(CATEGORY_TAG_GROUPS.keys())

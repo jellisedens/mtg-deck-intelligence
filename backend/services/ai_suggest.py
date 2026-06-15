@@ -437,61 +437,10 @@ async def _handle_suggest(prompt: str, deck_cards: list, deck_info: dict,
                           simulation_data: dict, card_lookup: dict,
                           role_data: dict, analytics: dict,
                           conversation_context: list = None) -> dict:
-    """Handle card suggestion requests."""
-    t_plan = time.time()
+    """Handle card suggestion requests — tag-based pipeline."""
+    from services.suggest_pipeline import suggest_with_tags
 
-    # Resolve color identity early so all downstream code has it
-    deck_ci = _get_deck_color_identity(deck_info, deck_cards, card_lookup)
-    if deck_ci and deck_info:
-        prefs = deck_info.get("preferences") or {}
-        if not prefs.get("color_identity"):
-            prefs["color_identity"] = deck_ci
-            deck_info["preferences"] = prefs
-            print(f"[AI] Color identity resolved early: {deck_ci}")
-
-    # Try direct query bypass first (skips AI calls for simple requests)
-    plan = _try_direct_queries(prompt, deck_info)
-    search_spec = None
-
-    if plan:
-        print(f"[AI] Direct bypass: {plan['reasoning']} ({time.time() - t_plan:.1f}s)")
-        print(f"[AI] Queries: {plan.get('scryfall_queries', [])}")
-        deck_context = None
-    else:
-        # Generate structured search spec (replaces AI planner)
-        deck_ci = _get_deck_color_identity(deck_info, deck_cards, card_lookup)
-        deck_format = (deck_info or {}).get("format", "commander")
-        search_spec = generate_search_spec(prompt, color_identity=deck_ci, deck_format=deck_format)
-
-        if search_spec.get("error") or not search_spec.get("scryfall_queries"):
-            # Spec failed — fall back to AI planner
-            deck_context = None
-            if deck_cards:
-                deck_context = build_deck_context(deck_cards, deck_info, analytics, card_lookup, role_data)
-            plan = _get_ai_plan(prompt, deck_context, deck_info)
-            if "error" in plan:
-                return plan
-            print(f"[AI] Fallback to AI planner ({time.time() - t_plan:.1f}s)")
-        else:
-            # Use spec as the plan
-            plan = {
-                "scryfall_queries": search_spec["scryfall_queries"],
-                "max_results": search_spec.get("max_results", 8),
-                "reasoning": search_spec.get("intent_summary", ""),
-                "oracle_filters": search_spec.get("oracle_required", []),
-                "mode": "search",
-            }
-            deck_context = None
-
-        print(f"[AI] Queries: {plan.get('scryfall_queries', [])}")
-
-    # Execute searches
-    existing_cards = set()
-    if deck_cards:
-        for card in deck_cards:
-            existing_cards.add(card.card_name.lower())
-
-    # Fetch EDHREC commander profile (cached on deck)
+    # Fetch EDHREC profile (cached on deck)
     edhrec_profile = None
     commander_name = None
     if deck_cards:
@@ -502,8 +451,6 @@ async def _handle_suggest(prompt: str, deck_cards: list, deck_info: dict,
     if commander_name and deck_info:
         profile = deck_info.get("strategy_profile") or {}
         cached_edhrec = profile.get("edhrec_profile")
-        
-        # Use cached if exists and matches current commander
         if cached_edhrec and cached_edhrec.get("commander_name", "").lower() == commander_name.lower():
             edhrec_profile = cached_edhrec
             print(f"[AI] EDHREC profile (cached): {edhrec_profile['total_decks']} decks for {commander_name}")
@@ -512,196 +459,18 @@ async def _handle_suggest(prompt: str, deck_cards: list, deck_info: dict,
                 edhrec_profile = await fetch_commander_profile(commander_name)
                 if edhrec_profile:
                     print(f"[AI] EDHREC profile fetched: {edhrec_profile['total_decks']} decks for {commander_name}")
-                    # Cache on strategy profile
                     _cache_edhrec_profile(deck_info, edhrec_profile)
             except Exception as e:
                 print(f"[AI] EDHREC fetch failed (non-fatal): {e}")
 
-    # EDHREC-first: load commander-proven cards as primary source
-    edhrec_cards_resolved = []
-    if edhrec_profile:
-        t_edhrec = time.time()
-        all_edhrec = []
-        for card in edhrec_profile.get("cards", []):
-            name_lower = card["name"].lower()
-            if name_lower in existing_cards:
-                continue
-            if card.get("inclusion_pct", 0) >= 20 or card.get("synergy", 0) >= 0.15:
-                all_edhrec.append(card)
-
-        if all_edhrec:
-            identifiers = [{"name": c["name"]} for c in all_edhrec[:75]]
-            resolved = await scryfall_service.get_collection(identifiers)
-            if "data" in resolved:
-                edhrec_lookup = {c["name"].lower(): c for c in all_edhrec}
-                for card_data in resolved["data"]:
-                    name_lower = card_data.get("name", "").lower()
-                    ecard = edhrec_lookup.get(name_lower, {})
-                    edhrec_cards_resolved.append({
-                        "name": card_data.get("name", ""),
-                        "mana_cost": card_data.get("mana_cost", ""),
-                        "cmc": card_data.get("cmc", 0),
-                        "type_line": card_data.get("type_line", ""),
-                        "oracle_text": card_data.get("oracle_text", ""),
-                        "colors": card_data.get("colors", []),
-                        "color_identity": card_data.get("color_identity", []),
-                        "rarity": card_data.get("rarity", ""),
-                        "prices": card_data.get("prices", {}),
-                        "image_uris": card_data.get("image_uris", {}),
-                        "scryfall_id": card_data.get("id", ""),
-                        "edhrec_rank": card_data.get("edhrec_rank"),
-                        "power": card_data.get("power"),
-                        "toughness": card_data.get("toughness"),
-                        "keywords": card_data.get("keywords", []),
-                        "_edhrec_proven": True,
-                        "_edhrec_synergy": ecard.get("synergy", 0),
-                        "_edhrec_inclusion_pct": ecard.get("inclusion_pct", 0),
-                    })
-                print(f"[AI] EDHREC-first: {len(edhrec_cards_resolved)} cards resolved ({time.time() - t_edhrec:.1f}s)")
-
-    # If direct bypass matched a category, filter EDHREC to relevant cards only
-    if edhrec_cards_resolved and plan.get("direct_bypass") and plan.get("reasoning"):
-        category_tag_map = {
-            "ramp": ["ramp", "mana-rock", "mana-dork", "land-ramp", "cost-reducer"],
-            "removal": ["removal", "spot-removal", "board-wipe", "creature-removal"],
-            "card draw": ["draw", "cantrip", "impulse-draw", "card-advantage"],
-            "protection": ["protection", "evasion"],
-            "lifegain": ["lifegain", "drain-life"],
-            "recursion": ["recursion", "reanimate"],
-            "sacrifice": ["sacrifice-outlet", "death-trigger", "free-sac-outlet"],
-            "blink": ["blink", "flicker"],
-            "counterspell": ["counterspell", "counter"],
-            "burn": ["burn"],
-            "mill": ["mill"],
-        }
-        for cat, tags in category_tag_map.items():
-            if cat in plan.get("reasoning", "").lower():
-                # Filter EDHREC cards: keep those whose oracle text matches tag patterns
-                # Until Phase 2 (tag EDHREC cards), use oracle text as proxy
-                tag_oracle_hints = {
-                    "ramp": ["add {", "add one mana", "search your library", "mana of any", "treasure", "cost", "less to cast"],
-                    "removal": ["destroy", "exile", "deals", "damage to"],
-                    "card draw": ["draw"],
-                    "protection": ["hexproof", "indestructible", "shroud", "protection from"],
-                    "lifegain": ["gain", "life"],
-                    "recursion": ["return", "graveyard"],
-                    "sacrifice": ["sacrifice", "dies", "death"],
-                    "blink": ["exile", "return", "battlefield"],
-                    "counterspell": ["counter target"],
-                    "burn": ["damage", "deals"],
-                    "mill": ["mill", "library", "into their graveyard"],
-                }
-                hints = tag_oracle_hints.get(cat, [])
-                if hints:
-                    before = len(edhrec_cards_resolved)
-                    edhrec_cards_resolved = [
-                        c for c in edhrec_cards_resolved
-                        if any(h in (c.get("oracle_text") or "").lower() for h in hints)
-                    ]
-                    print(f"[AI] EDHREC category filter ({cat}): {before} -> {len(edhrec_cards_resolved)}")
-                break
-
-    # Scryfall search — fills gaps EDHREC doesn't cover
-    t_search = time.time()
-    search_results = await _execute_searches(
-        queries=plan.get("scryfall_queries", []),
-        exclude_cards=existing_cards,
-    )
-    print(f"[AI] Scryfall results: {len(search_results)} ({time.time() - t_search:.1f}s)")
-
-    # Merge: EDHREC first, then Scryfall (deduplicated)
-    seen_names = {c["name"].lower() for c in edhrec_cards_resolved}
-    scryfall_unique = [c for c in search_results if c["name"].lower() not in seen_names]
-    search_results = edhrec_cards_resolved + scryfall_unique
-    print(f"[AI] Merged: {len(edhrec_cards_resolved)} EDHREC + {len(scryfall_unique)} Scryfall = {len(search_results)} total")
-
-    # Vector search supplements
-    search_results = _merge_vector_results(search_results, prompt, deck_info, existing_cards)
-
-    if len(search_results) < 5:
-        t_broaden = time.time()
-        search_results = await _broaden_search(prompt, plan, deck_context, search_results, existing_cards)
-        print(f"[AI] Broadened to {len(search_results)} ({time.time() - t_broaden:.1f}s)")
-
-    # Hard color identity filter — catch anything that slipped through
-    deck_ci = _get_deck_color_identity(deck_info, deck_cards, card_lookup)
-    search_results = _filter_by_color_identity(search_results, deck_ci)
-
-    # Deterministic constraints — CMC and price limits from prompt
-    det_constraints = extract_deterministic_constraints(prompt)
-    search_results = apply_deterministic_constraints(search_results, det_constraints)
-
-    # Apply search spec filter (hard oracle enforcement) or fallback
-    if search_spec:
-        search_results = apply_spec_filter(search_results, search_spec)
-
-    # Build focused prompt — scale results to requested count
-    # Default to 5 unless user explicitly asked for more
-    requested = _extract_requested_count(prompt)
-    max_results = requested if requested else 8
-    plan["max_results"] = max_results  # override planner's default of 10
-    max_cards = min(max_results + 10, 30)  # give AI some extra options to choose from
-    # Build a representative sample — take top results from EACH query
-    # so specific/niche query results aren't drowned by generic ones
-    trimmed_results = _build_representative_sample(search_results, plan.get("scryfall_queries", []), max_cards)
-    
-    # Apply playbook avoid filter
-    trimmed_results = _apply_playbook_filter(trimmed_results, prompt, deck_info)
-    
-    # Slim card data for the AI prompt to reduce token count
-    slim_results = []
-    for card in trimmed_results:
-        slim = {
-            "name": card["name"],
-            "mana_cost": card.get("mana_cost", ""),
-            "cmc": card.get("cmc", 0),
-            "type_line": card.get("type_line", ""),
-            "oracle_text": card.get("oracle_text", ""),
-            "rarity": card.get("rarity", ""),
-            "scryfall_id": card["scryfall_id"],
-            "edhrec_rank": card.get("edhrec_rank"),
-        }
-        if card.get("_edhrec_proven"):
-            slim["edhrec_proven"] = True
-            slim["edhrec_synergy"] = card.get("_edhrec_synergy", 0)
-            slim["edhrec_inclusion_pct"] = card.get("_edhrec_inclusion_pct", 0)
-        slim_results.append(slim)
-
-
-    # Pass constraints to prompt builder
-    if det_constraints:
-        plan["_det_constraints"] = det_constraints
-
-    # Inject EDHREC context for prompt builder
-    if edhrec_profile and deck_info:
-        deck_info["_edhrec_context"] = format_edhrec_context_for_prompt(
-            edhrec_profile, list(existing_cards), max_cards=15
-        )
-
-        
-    system, user_msg = build_suggest_prompt(
+    result = await suggest_with_tags(
         prompt=prompt,
-        plan=plan,
-        search_results=slim_results,
+        deck_cards=deck_cards,
         deck_info=deck_info,
-        simulation_data=simulation_data,
-        synergy_rules=SYNERGY_RULES,
-        strategic_context=STRATEGIC_CONTEXT,
+        card_lookup=card_lookup,
+        edhrec_profile=edhrec_profile,
         conversation_context=conversation_context,
     )
-
-    # Call AI and process
-    print(f"[AI] Prompt size: system={len(system)} user={len(user_msg)} total={len(system)+len(user_msg)} chars (~{(len(system)+len(user_msg))//4} tokens)")
-    t_ai = time.time()
-    result = _call_ai(system, user_msg)
-    print(f"[AI] Main AI call ({time.time() - t_ai:.1f}s)")
-
-    result = _expand_compact_suggestions(result)
-    result = _verify_suggestions(result, search_results)
-    result.setdefault("debug", {})
-    result["debug"]["scryfall_queries"] = plan.get("scryfall_queries", [])
-    result["debug"]["total_search_results"] = len(search_results)
-    result["debug"]["direct_bypass"] = plan.get("direct_bypass", False)
 
     return result
 

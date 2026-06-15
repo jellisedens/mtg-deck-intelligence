@@ -25,19 +25,20 @@ app = FastAPI(
 @app.on_event("startup")
 async def load_tag_index():
     """Load Scryfall oracle tag index on startup."""
-    print("[STARTUP] Loading tag index...")
+    import sys
+    print("[STARTUP] Loading tag index...", flush=True)
+    sys.stdout.flush()
     try:
         from services.tag_index import download_and_build_index, is_index_loaded
         if not is_index_loaded():
             result = await download_and_build_index()
-            print(f"[STARTUP] Tag index result: {result}")
+            print(f"[STARTUP] Tag index result: {result}", flush=True)
         else:
-            print("[STARTUP] Tag index already loaded")
+            print("[STARTUP] Tag index already loaded", flush=True)
     except Exception as e:
         import traceback
-        print(f"[STARTUP] Tag index failed: {e}")
+        print(f"[STARTUP] Tag index failed: {e}", flush=True)
         traceback.print_exc()
-
 
 # Rate limiting — runs before CORS to reject spam early
 app.add_middleware(RateLimitMiddleware)

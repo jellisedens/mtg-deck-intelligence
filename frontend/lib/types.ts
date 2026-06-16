@@ -242,6 +242,7 @@ export interface AISuggestRequest {
     prompt: string;
     deck_id: string;
     intent_override?: string;
+    is_clarification_response?: boolean;
     conversation_context?: Array<{
     role: string;
     content: string;

@@ -291,7 +291,7 @@ export default function AISuggestPanel({ deckId, onAddCard }: Props) {
     };
   }, [loading]);
 
-  async function sendPrompt(userMessage: string) {
+  async function sendPrompt(userMessage: string, isClarificationResponse: boolean = false) {
     if (!userMessage.trim() || loading) return;
 
     let promptToSend = userMessage;
@@ -308,6 +308,7 @@ export default function AISuggestPanel({ deckId, onAddCard }: Props) {
         prompt: promptToSend,
         deck_id: deckId,
         intent_override: mode || undefined,
+        is_clarification_response: isClarificationResponse || undefined,
         conversation_context: conversationHistory.length > 0 ? conversationHistory : undefined,
       });
 
@@ -353,7 +354,7 @@ export default function AISuggestPanel({ deckId, onAddCard }: Props) {
 
   function handleOptionClick(option: string) {
     if (loading) return;
-    sendPrompt(option);
+    sendPrompt(option, true);
   }
 
   return (

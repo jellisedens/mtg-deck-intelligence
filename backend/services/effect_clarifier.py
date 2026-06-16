@@ -110,6 +110,9 @@ def check_for_effect_clarification(prompt: str) -> dict | None:
         "grant ", "place ", "free ", "reanimate", "reanimation",
         "evasion", "damage trigger", "damage multiplier",
         "token generator", "blink enabler",
+        "protect", "board protection", "single target",
+        "graveyard protection", "pillowfort",
+        "damage prevention", "hexproof", "indestructible",
     ]):
         return None
 

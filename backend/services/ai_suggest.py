@@ -277,7 +277,8 @@ def _apply_playbook_filter(results: list, prompt: str, deck_info: dict) -> list:
 async def get_suggestions(prompt: str, deck_cards: list = None, deck_info: dict = None,
                           simulation_data: dict = None, card_lookup: dict = None,
                           conversation_context: list = None,
-                          intent_override: str = None) -> dict:
+                          intent_override: str = None,
+                          is_clarification_response: bool = False) -> dict:
     """
     Main entry point for AI suggestions.
     Classifies intent and routes to the appropriate prompt builder.
@@ -300,8 +301,9 @@ async def get_suggestions(prompt: str, deck_cards: list = None, deck_info: dict 
     if is_vague:
         prompt = "suggest cards for this deck"
         print(f"[AI] Vague clarification response detected, rewritten to: '{prompt}'")
-    elif not intent_override:
+    elif not intent_override and not is_clarification_response:
         # Only clarify when user hasn't explicitly selected a mode
+        # and this isn't a response to a previous clarification
         clarification = _check_for_clarification(prompt)
         if clarification:
             print(f"[AI] Category clarifier caught: '{prompt}' -> {clarification.get('clarification_question')}")

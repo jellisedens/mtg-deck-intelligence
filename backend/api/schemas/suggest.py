@@ -8,6 +8,7 @@ class SuggestRequest(BaseModel):
     deck_id: Optional[UUID] = None
     conversation_context: Optional[list[dict]] = None
     intent_override: Optional[str] = None
+    is_clarification_response: Optional[bool] = False
 
 
 class CardSuggestion(BaseModel):

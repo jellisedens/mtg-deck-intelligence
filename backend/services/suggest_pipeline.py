@@ -259,8 +259,9 @@ async def suggest_with_tags(
             s["edhrec_inclusion_pct"] = card.get("_edhrec_inclusion_pct", 0)
         slim.append(s)
 
-    # Build deck context summary
+    # Build deck context with role intelligence
     deck_summary = ""
+    deck_intel = ""
     if deck_info:
         name = deck_info.get("name", "")
         fmt = deck_info.get("format", "commander")
@@ -270,12 +271,21 @@ async def suggest_with_tags(
         if strategy:
             deck_summary += f", Strategy: {strategy}"
 
+    if deck_cards and card_lookup:
+        from services.card_tagger import get_deck_role_distribution, get_deck_gaps, format_deck_intelligence
+        role_dist = get_deck_role_distribution(deck_cards, card_lookup)
+        gaps = get_deck_gaps(role_dist)
+        deck_intel = format_deck_intelligence(role_dist, gaps)
+
     system = f"""You are an expert Magic: The Gathering deck builder.
 Pick the {max_results} best cards from the search results for the user's request.
 
 {deck_summary}
 
+{deck_intel}
+
 Rules:
+- PRIORITIZE filling deck gaps — if the deck needs draw, prefer draw cards even for general requests
 - ONLY pick cards from the search results below — never invent cards
 - Cards marked ★PROVEN are used in real commander decks — STRONGLY PREFER these
 - Higher synergy % means more effective with this specific commander

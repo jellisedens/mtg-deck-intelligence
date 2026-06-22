@@ -364,9 +364,9 @@ async def get_suggestions(prompt: str, deck_cards: list = None, deck_info: dict 
     if intent == INTENT_CUTS:
         result = await _handle_cuts(prompt, deck_info, simulation_data, deck_cards, card_lookup)
     elif intent == INTENT_ANALYZE:
-        result = await _handle_analyze(prompt, deck_info, simulation_data)
+        result = await _handle_analyze(prompt, deck_info, simulation_data, deck_cards, card_lookup)
     elif intent == INTENT_DISCUSS:
-        result = await _handle_discuss(prompt, deck_info)
+        result = await _handle_discuss(prompt, deck_info, deck_cards, card_lookup)
     elif intent == INTENT_SWAP:
         result = await _handle_swap(
             prompt, deck_cards, deck_info, simulation_data,
@@ -510,8 +510,39 @@ def _cache_edhrec_profile(deck_info: dict, edhrec_profile: dict):
         
 async def _handle_cuts(prompt: str, deck_info: dict, simulation_data: dict,
                        deck_cards: list, card_lookup: dict) -> dict:
-    """Handle cut recommendation requests."""
+    """Handle cut recommendation requests — tag-aware."""
     t_ai = time.time()
+
+    # Build deck intelligence from tags
+    deck_intel = ""
+    edhrec_context = ""
+    if deck_cards and card_lookup:
+        from services.card_tagger import get_deck_role_distribution, get_deck_gaps, format_deck_intelligence
+        role_dist = get_deck_role_distribution(deck_cards, card_lookup)
+        gaps = get_deck_gaps(role_dist)
+        deck_intel = format_deck_intelligence(role_dist, gaps)
+
+        # Build per-card role info for cut decisions
+        card_roles = role_dist.get("card_roles", {})
+        over_represented = []
+        under_represented = []
+        for gap in gaps:
+            under_represented.append(gap["role"])
+        counts = role_dist.get("counts", {})
+        from services.card_tagger import COMMANDER_ROLE_TARGETS
+        for role, count in counts.items():
+            target = COMMANDER_ROLE_TARGETS.get(role, 0)
+            if target and count > target + 2:
+                over_represented.append(role)
+
+    # Get EDHREC inclusion data for cut safety
+    edhrec_inclusion = {}
+    if deck_info:
+        profile = deck_info.get("strategy_profile") or {}
+        edhrec = profile.get("edhrec_profile", {})
+        for card in edhrec.get("cards", []):
+            edhrec_inclusion[card["name"].lower()] = card.get("inclusion_pct", 0)
+
     system, user_msg = build_cuts_prompt(
         prompt=prompt,
         deck_info=deck_info,
@@ -519,6 +550,32 @@ async def _handle_cuts(prompt: str, deck_info: dict, simulation_data: dict,
         deck_cards=deck_cards,
         card_lookup=card_lookup,
     )
+
+    # Inject deck intelligence into the prompt
+    intel_section = ""
+    if deck_intel:
+        intel_section += f"\n\n{deck_intel}"
+    if over_represented:
+        intel_section += f"\n\nOVER-REPRESENTED ROLES (safe to cut from): {', '.join(over_represented)}"
+    if under_represented:
+        intel_section += f"\nUNDER-REPRESENTED ROLES (NEVER cut from): {', '.join(under_represented)}"
+    if edhrec_inclusion:
+        intel_section += "\n\nEDHREC INCLUSION (cards in <20% of decks are safer cuts):"
+        if deck_cards:
+            for card in deck_cards:
+                pct = edhrec_inclusion.get(card.card_name.lower(), 0)
+                if pct > 0:
+                    safety = "SAFE CUT" if pct < 20 else "CAUTION" if pct < 40 else "PROTECT"
+                    intel_section += f"\n  {card.card_name}: {pct:.0f}% inclusion [{safety}]"
+    if card_roles:
+        intel_section += "\n\nCARD ROLES:"
+        if deck_cards:
+            for card in deck_cards:
+                roles = card_roles.get(card.card_name, [])
+                if roles:
+                    intel_section += f"\n  {card.card_name}: {', '.join(roles)}"
+
+    system += intel_section
 
     result = _call_ai(system, user_msg)
     print(f"[AI] Cuts AI call ({time.time() - t_ai:.1f}s)")
@@ -530,30 +587,44 @@ async def _handle_cuts(prompt: str, deck_info: dict, simulation_data: dict,
     return result
 
 
-async def _handle_analyze(prompt: str, deck_info: dict, simulation_data: dict) -> dict:
-    """Handle deck analysis requests."""
+async def _handle_analyze(prompt: str, deck_info: dict, simulation_data: dict,
+                          deck_cards: list = None, card_lookup: dict = None) -> dict:
+    """Handle deck analysis requests — tag-aware."""
     t_ai = time.time()
+
+    # Build deck intelligence from tags
+    deck_intel = ""
+    if deck_cards and card_lookup:
+        from services.card_tagger import get_deck_role_distribution, get_deck_gaps, format_deck_intelligence
+        role_dist = get_deck_role_distribution(deck_cards, card_lookup)
+        gaps = get_deck_gaps(role_dist)
+        deck_intel = format_deck_intelligence(role_dist, gaps)
+
     system, user_msg = build_analyze_prompt(
         prompt=prompt,
         deck_info=deck_info,
         simulation_data=simulation_data,
     )
 
+    if deck_intel:
+        system += f"\n\n{deck_intel}\n\nUse this data to provide SPECIFIC analysis with exact numbers. Don't guess — reference the role counts above."
+
     result = _call_ai(system, user_msg)
     print(f"[AI] Analyze AI call ({time.time() - t_ai:.1f}s)")
 
-    # Force empty arrays — analysis puts everything in strategy_notes
     result["suggestions"] = []
     result["cuts"] = []
     result.setdefault("debug", {})
 
     return result
 
-async def _handle_discuss(prompt: str, deck_info: dict = None) -> dict:
-    """Handle strategy discussion questions — conversational MTG knowledge."""
+async def _handle_discuss(prompt: str, deck_info: dict = None,
+                          deck_cards: list = None, card_lookup: dict = None) -> dict:
+    """Handle strategy discussion questions — tag-aware."""
     t_ai = time.time()
 
     deck_context = ""
+    deck_intel = ""
     if deck_info:
         name = deck_info.get("name", "")
         fmt = deck_info.get("format", "commander")
@@ -568,6 +639,12 @@ async def _handle_discuss(prompt: str, deck_info: dict = None) -> dict:
                 deck_context += f", strategy: {strategy}"
             deck_context += "\nReference their deck when relevant, but focus on answering the question."
 
+    if deck_cards and card_lookup:
+        from services.card_tagger import get_deck_role_distribution, get_deck_gaps, format_deck_intelligence
+        role_dist = get_deck_role_distribution(deck_cards, card_lookup)
+        gaps = get_deck_gaps(role_dist)
+        deck_intel = format_deck_intelligence(role_dist, gaps)
+
     system = f"""You are an expert Magic: The Gathering strategy advisor with deep knowledge of 
 all formats, mechanics, and deckbuilding theory.
 
@@ -581,7 +658,9 @@ Respond with ONLY valid JSON:
     "cuts": [],
     "strategy_notes": "Detailed explanation covering the topic. Include format-specific context, common misconceptions, and practical advice. Reference specific cards as examples where helpful, but don't turn this into a card suggestion list."
 }}
-{deck_context}"""
+{deck_context}
+
+{deck_intel}"""
 
     result = _call_ai(system, prompt)
     print(f"[AI] Discuss AI call ({time.time() - t_ai:.1f}s)")

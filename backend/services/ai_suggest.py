@@ -320,6 +320,11 @@ async def get_suggestions(prompt: str, deck_cards: list = None, deck_info: dict 
         intent = intent_override
         intent_result = {"intent": intent, "confidence": "override", "method": "user_selected"}
         print(f"[AI] Intent override: {intent}")
+    elif is_clarification_response:
+        # Clarification responses are always suggest intent
+        intent = INTENT_SUGGEST
+        intent_result = {"intent": intent, "confidence": "high", "method": "clarification_response"}
+        print(f"[AI] Intent: suggest (clarification response)")
     else:
         intent_result = classify_intent(prompt, has_deck=deck_cards is not None)
         intent = intent_result["intent"]

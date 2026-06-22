@@ -576,6 +576,7 @@ async def _handle_cuts(prompt: str, deck_info: dict, simulation_data: dict,
                     intel_section += f"\n  {card.card_name}: {', '.join(roles)}"
 
     system += intel_section
+    print(f"[AI] Cuts intel injected: {len(intel_section)} chars")
 
     result = _call_ai(system, user_msg)
     print(f"[AI] Cuts AI call ({time.time() - t_ai:.1f}s)")
@@ -608,6 +609,7 @@ async def _handle_analyze(prompt: str, deck_info: dict, simulation_data: dict,
 
     if deck_intel:
         system += f"\n\n{deck_intel}\n\nUse this data to provide SPECIFIC analysis with exact numbers. Don't guess — reference the role counts above."
+        print(f"[AI] Analyze intel injected: {len(deck_intel)} chars")
 
     result = _call_ai(system, user_msg)
     print(f"[AI] Analyze AI call ({time.time() - t_ai:.1f}s)")
@@ -661,6 +663,7 @@ Respond with ONLY valid JSON:
 {deck_context}
 
 {deck_intel}"""
+print(f"[AI] Discuss intel: {len(deck_intel)} chars")
 
     result = _call_ai(system, prompt)
     print(f"[AI] Discuss AI call ({time.time() - t_ai:.1f}s)")

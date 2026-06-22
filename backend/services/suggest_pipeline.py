@@ -3,12 +3,13 @@ New suggest pipeline — tag-based card discovery.
 
 Replaces oracle text pattern matching with:
 1. AI tag classifier (prompt → categories)
-2. Tagged EDHREC pool (primary source)
+2. Tagged EDHREC pool (primary source, cached after first resolve)
 3. Scryfall otag: search (fills gaps)
 4. Oracle text fallback (untagged cards)
 """
 
 import os
+import re
 import json
 import time
 import asyncio
@@ -35,7 +36,7 @@ async def suggest_with_tags(
 ) -> dict:
     """
     Tag-based suggest pipeline.
-    
+
     Returns the same format as the current _handle_suggest:
     {
         "summary": str,
@@ -76,49 +77,62 @@ async def suggest_with_tags(
     edhrec_tagged = []
 
     if edhrec_profile:
-        all_edhrec = []
-        for card in edhrec_profile.get("cards", []):
-            if card["name"].lower() not in existing_cards:
-                all_edhrec.append(card)
+        # Check for cached tagged pool first
+        cached_pool = edhrec_profile.get("_tagged_pool")
+        if cached_pool:
+            # Use cached — filter out cards already in deck
+            edhrec_tagged = [
+                c for c in cached_pool
+                if c["name"].lower() not in existing_cards
+            ]
+            print(f"[TAG] EDHREC pool (cached): {len(edhrec_tagged)} cards ({time.time() - t_edhrec:.1f}s)")
+        else:
+            # Resolve and tag all cards, then cache
+            all_edhrec = []
+            for card in edhrec_profile.get("cards", []):
+                if card["name"].lower() not in existing_cards:
+                    all_edhrec.append(card)
 
-        if all_edhrec:
-            # Batch resolve ALL cards (not capped at 75)
-            for i in range(0, len(all_edhrec), 75):
-                batch = all_edhrec[i:i + 75]
-                identifiers = [{"name": c["name"]} for c in batch]
-                resolved = await scryfall_service.get_collection(identifiers)
-                if "data" in resolved:
-                    lookup = {c["name"].lower(): c for c in batch}
-                    for card_data in resolved["data"]:
-                        name = card_data.get("name", "")
-                        ecard = lookup.get(name.lower(), {})
-                        oracle_id = card_data.get("oracle_id", "")
-                        tags = get_card_tags(oracle_id) if is_index_loaded() else []
+            if all_edhrec:
+                for i in range(0, len(all_edhrec), 75):
+                    batch = all_edhrec[i:i + 75]
+                    identifiers = [{"name": c["name"]} for c in batch]
+                    resolved = await scryfall_service.get_collection(identifiers)
+                    if "data" in resolved:
+                        lookup = {c["name"].lower(): c for c in batch}
+                        for card_data in resolved["data"]:
+                            name = card_data.get("name", "")
+                            ecard = lookup.get(name.lower(), {})
+                            oracle_id = card_data.get("oracle_id", "")
+                            tags = get_card_tags(oracle_id) if is_index_loaded() else []
 
-                        edhrec_tagged.append({
-                            "name": name,
-                            "mana_cost": card_data.get("mana_cost", ""),
-                            "cmc": card_data.get("cmc", 0),
-                            "type_line": card_data.get("type_line", ""),
-                            "oracle_text": card_data.get("oracle_text", ""),
-                            "colors": card_data.get("colors", []),
-                            "color_identity": card_data.get("color_identity", []),
-                            "rarity": card_data.get("rarity", ""),
-                            "prices": card_data.get("prices", {}),
-                            "image_uris": card_data.get("image_uris", {}),
-                            "scryfall_id": card_data.get("id", ""),
-                            "edhrec_rank": card_data.get("edhrec_rank"),
-                            "power": card_data.get("power"),
-                            "toughness": card_data.get("toughness"),
-                            "keywords": card_data.get("keywords", []),
-                            "tags": tags,
-                            "oracle_id": oracle_id,
-                            "_edhrec_proven": True,
-                            "_edhrec_synergy": ecard.get("synergy", 0),
-                            "_edhrec_inclusion_pct": ecard.get("inclusion_pct", 0),
-                        })
+                            edhrec_tagged.append({
+                                "name": name,
+                                "mana_cost": card_data.get("mana_cost", ""),
+                                "cmc": card_data.get("cmc", 0),
+                                "type_line": card_data.get("type_line", ""),
+                                "oracle_text": card_data.get("oracle_text", ""),
+                                "colors": card_data.get("colors", []),
+                                "color_identity": card_data.get("color_identity", []),
+                                "rarity": card_data.get("rarity", ""),
+                                "prices": card_data.get("prices", {}),
+                                "image_uris": card_data.get("image_uris", {}),
+                                "scryfall_id": card_data.get("id", ""),
+                                "edhrec_rank": card_data.get("edhrec_rank"),
+                                "power": card_data.get("power"),
+                                "toughness": card_data.get("toughness"),
+                                "keywords": card_data.get("keywords", []),
+                                "tags": tags,
+                                "oracle_id": oracle_id,
+                                "_edhrec_proven": True,
+                                "_edhrec_synergy": ecard.get("synergy", 0),
+                                "_edhrec_inclusion_pct": ecard.get("inclusion_pct", 0),
+                            })
 
-        print(f"[TAG] EDHREC pool: {len(edhrec_tagged)} cards ({time.time() - t_edhrec:.1f}s)")
+                # Cache the tagged pool on the profile for next time
+                _cache_tagged_pool(edhrec_profile, edhrec_tagged, deck_info)
+
+            print(f"[TAG] EDHREC pool (resolved): {len(edhrec_tagged)} cards ({time.time() - t_edhrec:.1f}s)")
 
     # ── Step 5: Filter EDHREC pool by categories ─────────────
     if "general" not in categories:
@@ -153,10 +167,8 @@ async def suggest_with_tags(
         queries = []
         for cat in categories:
             tag_group = CATEGORY_TAG_GROUPS.get(cat, [])
-            # Use the first few tags as otag: queries
             otag_names = []
             for tag in tag_group[:3]:
-                # Convert tag name to otag format (spaces → hyphens)
                 otag = tag.replace(" ", "-").replace("'", "")
                 otag_names.append(otag)
 
@@ -310,7 +322,6 @@ Respond with ONLY valid JSON:
         )
         content = response.choices[0].message.content.strip()
         content = content.replace("```json", "").replace("```", "").strip()
-        import re
         content = re.sub(r',\s*([}\]])', r'\1', content)
         result = json.loads(content)
     except Exception as e:
@@ -321,7 +332,7 @@ Respond with ONLY valid JSON:
     print(f"[TAG] Total: {time.time() - t_start:.1f}s")
 
     # Verify suggestions exist in our results
-    result_lookup = {c["scryfall_id"]: c for c in all_results}
+    result_lookup = {c.get("scryfall_id", ""): c for c in all_results}
     name_lookup = {c["name"].lower(): c for c in all_results}
 
     verified = []
@@ -330,15 +341,17 @@ Respond with ONLY valid JSON:
         name_lower = suggestion.get("card_name", "").lower()
 
         if card_data and card_data.get("name", "").lower() == name_lower:
-            suggestion["image_uri"] = card_data.get("image_uris", {}).get("normal", "")
+            sid = card_data.get("scryfall_id", "")
+            suggestion["image_uri"] = card_data.get("image_uris", {}).get("normal", "") or f"https://api.scryfall.com/cards/{sid}?format=image&version=normal"
             suggestion["mana_cost"] = card_data.get("mana_cost", "")
             suggestion["type_line"] = card_data.get("type_line", "")
             suggestion["price_usd"] = card_data.get("prices", {}).get("usd")
             verified.append(suggestion)
         elif name_lower in name_lookup:
             correct = name_lookup[name_lower]
-            suggestion["scryfall_id"] = correct["scryfall_id"]
-            suggestion["image_uri"] = correct.get("image_uris", {}).get("normal", "")
+            sid = correct.get("scryfall_id", "")
+            suggestion["scryfall_id"] = sid
+            suggestion["image_uri"] = correct.get("image_uris", {}).get("normal", "") or f"https://api.scryfall.com/cards/{sid}?format=image&version=normal"
             suggestion["mana_cost"] = correct.get("mana_cost", "")
             suggestion["type_line"] = correct.get("type_line", "")
             suggestion["price_usd"] = correct.get("prices", {}).get("usd")
@@ -355,3 +368,53 @@ Respond with ONLY valid JSON:
     result["debug"]["total_candidates"] = len(all_results)
 
     return result
+
+
+def _cache_tagged_pool(edhrec_profile: dict, tagged_pool: list, deck_info: dict = None):
+    """Cache the resolved + tagged EDHREC pool on the strategy profile."""
+    try:
+        slim_pool = []
+        for card in tagged_pool:
+            slim_pool.append({
+                "name": card["name"],
+                "mana_cost": card.get("mana_cost", ""),
+                "cmc": card.get("cmc", 0),
+                "type_line": card.get("type_line", ""),
+                "oracle_text": card.get("oracle_text", ""),
+                "colors": card.get("colors", []),
+                "color_identity": card.get("color_identity", []),
+                "rarity": card.get("rarity", ""),
+                "scryfall_id": card.get("scryfall_id", ""),
+                "edhrec_rank": card.get("edhrec_rank"),
+                "power": card.get("power"),
+                "toughness": card.get("toughness"),
+                "tags": card.get("tags", []),
+                "oracle_id": card.get("oracle_id", ""),
+                "_edhrec_proven": True,
+                "_edhrec_synergy": card.get("_edhrec_synergy", 0),
+                "_edhrec_inclusion_pct": card.get("_edhrec_inclusion_pct", 0),
+            })
+
+        edhrec_profile["_tagged_pool"] = slim_pool
+        print(f"[TAG] Cached tagged pool: {len(slim_pool)} cards")
+
+        if deck_info:
+            from database.session import SessionLocal
+            from sqlalchemy import text
+
+            profile = deck_info.get("strategy_profile") or {}
+            profile["edhrec_profile"] = edhrec_profile
+            deck_info["strategy_profile"] = profile
+
+            deck_name = deck_info.get("name")
+            if deck_name:
+                db = SessionLocal()
+                db.execute(
+                    text("UPDATE decks SET strategy_profile = :profile WHERE name = :name"),
+                    {"profile": json.dumps(profile), "name": deck_name},
+                )
+                db.commit()
+                db.close()
+                print(f"[TAG] Persisted tagged pool to database")
+    except Exception as e:
+        print(f"[TAG] Failed to cache tagged pool: {e}")

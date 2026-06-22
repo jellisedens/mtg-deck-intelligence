@@ -295,8 +295,11 @@ async def get_suggestions(prompt: str, deck_cards: list = None, deck_info: dict 
     # Check for vague/catch-all responses (exact or substring)
     vague_phrases = ["all of the above", "bit of everything", "everything related"]
     is_vague = (
-        prompt.lower().strip() in vague_responses
-        or any(phrase in prompt.lower() for phrase in vague_phrases)
+        not is_clarification_response
+        and (
+            prompt.lower().strip() in vague_responses
+            or any(phrase in prompt.lower() for phrase in vague_phrases)
+        )
     )
     if is_vague:
         prompt = "suggest cards for this deck"
@@ -312,7 +315,6 @@ async def get_suggestions(prompt: str, deck_cards: list = None, deck_info: dict 
         if effect_clarification:
             print(f"[AI] Effect clarifier caught: '{prompt}' -> {effect_clarification.get('clarification_question')}")
             return effect_clarification
-        
 
 
     # Classify intent (skip if user explicitly selected a mode)

@@ -293,7 +293,7 @@ async def get_suggestions(prompt: str, deck_cards: list = None, deck_info: dict 
         "don't know", "no preference",
     ]
     # Check for vague/catch-all responses (exact or substring)
-    vague_phrases = ["mix of everything", "all of the above", "bit of everything", "show me all", "everything related"]
+    vague_phrases = ["all of the above", "bit of everything", "everything related"]
     is_vague = (
         prompt.lower().strip() in vague_responses
         or any(phrase in prompt.lower() for phrase in vague_phrases)

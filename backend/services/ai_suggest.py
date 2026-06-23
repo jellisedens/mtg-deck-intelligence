@@ -720,18 +720,26 @@ async def _handle_discuss(prompt: str, deck_info: dict = None,
         gaps = get_deck_gaps(role_dist)
         deck_intel = format_deck_intelligence(role_dist, gaps)
 
+    # Get color identity
+    color_identity = _get_deck_color_identity(deck_info, deck_cards, card_lookup)
+    ci_str = ", ".join(color_identity) if color_identity else "unknown"
+
     system = f"""You are an expert Magic: The Gathering strategy advisor with deep knowledge of 
 all formats, mechanics, and deckbuilding theory.
 
 The user is asking a strategy question — NOT requesting card suggestions or deck changes.
 Give a thoughtful, conversational answer that teaches and informs.
 
+CRITICAL: This deck's color identity is [{ci_str}]. ONLY reference cards that are within this color identity.
+In Commander, a deck can ONLY play cards whose color identity is a subset of the commander's.
+Do NOT suggest or mention cards outside the color identity, even as examples.
+
 Respond with ONLY valid JSON:
 {{
     "summary": "Direct answer to their question in 2-3 sentences",
     "suggestions": [],
     "cuts": [],
-    "strategy_notes": "Detailed explanation covering the topic. Include format-specific context, common misconceptions, and practical advice. Reference specific cards as examples where helpful, but don't turn this into a card suggestion list."
+    "strategy_notes": "Detailed explanation covering the topic. Include format-specific context, common misconceptions, and practical advice. Reference specific cards as examples where helpful, but ONLY cards within the deck's color identity."
 }}
 {deck_context}
 

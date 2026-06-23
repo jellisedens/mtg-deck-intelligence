@@ -510,73 +510,144 @@ def _cache_edhrec_profile(deck_info: dict, edhrec_profile: dict):
         
 async def _handle_cuts(prompt: str, deck_info: dict, simulation_data: dict,
                        deck_cards: list, card_lookup: dict) -> dict:
-    """Handle cut recommendation requests — tag-aware."""
+    """Handle cut recommendation requests — EDHREC + tag-based, no impact scores."""
     t_ai = time.time()
 
     # Build deck intelligence from tags
     deck_intel = ""
-    edhrec_context = ""
+    card_roles = {}
+    over_represented = []
+    under_represented = []
+
     if deck_cards and card_lookup:
-        from services.card_tagger import get_deck_role_distribution, get_deck_gaps, format_deck_intelligence
+        from services.card_tagger import (
+            get_deck_role_distribution, get_deck_gaps,
+            format_deck_intelligence, COMMANDER_ROLE_TARGETS,
+        )
         role_dist = get_deck_role_distribution(deck_cards, card_lookup)
         gaps = get_deck_gaps(role_dist)
         deck_intel = format_deck_intelligence(role_dist, gaps)
-
-        # Build per-card role info for cut decisions
         card_roles = role_dist.get("card_roles", {})
-        over_represented = []
-        under_represented = []
+        counts = role_dist.get("counts", {})
+
         for gap in gaps:
             under_represented.append(gap["role"])
-        counts = role_dist.get("counts", {})
-        from services.card_tagger import COMMANDER_ROLE_TARGETS
         for role, count in counts.items():
             target = COMMANDER_ROLE_TARGETS.get(role, 0)
             if target and count > target + 2:
                 over_represented.append(role)
 
-    # Get EDHREC inclusion data for cut safety
+    # Get EDHREC inclusion data
     edhrec_inclusion = {}
     if deck_info:
         profile = deck_info.get("strategy_profile") or {}
         edhrec = profile.get("edhrec_profile", {})
         for card in edhrec.get("cards", []):
-            edhrec_inclusion[card["name"].lower()] = card.get("inclusion_pct", 0)
+            edhrec_inclusion[card["name"].lower()] = {
+                "inclusion_pct": card.get("inclusion_pct", 0),
+                "synergy": card.get("synergy", 0),
+            }
 
-    system, user_msg = build_cuts_prompt(
-        prompt=prompt,
-        deck_info=deck_info,
-        simulation_data=simulation_data,
-        deck_cards=deck_cards,
-        card_lookup=card_lookup,
-    )
+    # Build cut candidates from EDHREC + tags
+    cut_candidates = []
+    if deck_cards:
+        for card in deck_cards:
+            if card.board == "commander":
+                continue
+            name = card.card_name
+            roles = card_roles.get(name, [])
+            edata = edhrec_inclusion.get(name.lower(), {})
+            inclusion = edata.get("inclusion_pct", 0)
+            synergy = edata.get("synergy", 0)
 
-    # Inject deck intelligence into the prompt
-    intel_section = ""
+            if inclusion >= 40:
+                safety = "PROTECT"
+            elif inclusion >= 20:
+                safety = "CAUTION"
+            elif inclusion > 0:
+                safety = "SAFE CUT"
+            else:
+                safety = "NO DATA"
+
+            in_critical_role = any(r in under_represented for r in roles)
+            in_excess_role = any(r in over_represented for r in roles)
+
+            cut_candidates.append({
+                "name": name,
+                "roles": roles,
+                "inclusion_pct": inclusion,
+                "synergy": synergy,
+                "safety": safety,
+                "in_critical_role": in_critical_role,
+                "in_excess_role": in_excess_role,
+            })
+
+    # Sort: safest cuts first
+    cut_candidates.sort(key=lambda c: (
+        c["in_critical_role"],
+        -c["in_excess_role"],
+        c["inclusion_pct"],
+        c["synergy"],
+    ))
+
+    # Build the prompt directly (bypass build_cuts_prompt)
+    deck_summary = ""
+    if deck_info:
+        profile = deck_info.get("strategy_profile") or {}
+        deck_summary = profile.get("deck_summary", "")
+
+    system = """You are an expert Magic: The Gathering deck advisor.
+Identify the weakest cards using EDHREC community data and role distribution.
+
+Respond with ONLY valid JSON:
+{
+    "summary": "1-2 sentence deck health assessment citing DECK COMPOSITION numbers",
+    "suggestions": [],
+    "cuts": [
+        {
+            "card_name": "Card name from CUT CANDIDATES",
+            "reasoning": "Cite EDHREC inclusion %, synergy, safety label, and role"
+        }
+    ],
+    "strategy_notes": "What the deck gains by making these cuts"
+}
+
+CUT PRIORITY:
+1. SAFE CUT cards (<20% EDHREC inclusion) — community says these are weak with this commander
+2. Cards in EXCESS roles — deck has too many, cut the least synergistic
+3. NO DATA cards — not in EDHREC at all, likely not ideal for this commander
+4. CAUTION cards — only if better options aren't available
+5. PROTECT cards (>40% inclusion) — NEVER cut unless user specifically asks
+
+ABSOLUTE RULES:
+- MUST suggest exactly 2-3 cuts
+- NEVER cut cards in UNDER-REPRESENTED roles (the deck needs MORE of those)
+- Cards with multiple roles are more valuable — weight them higher
+- Always cite the EDHREC inclusion % and safety label
+- If a card has 0% inclusion but fills a critical role, note the tradeoff
+- Do NOT reference impact scores — use EDHREC data and roles only"""
+
+    user_msg = f"User request: {prompt}\n\n"
+
+    if deck_summary:
+        user_msg += f"Deck summary:\n{deck_summary}\n\n"
+
     if deck_intel:
-        intel_section += f"\n\n{deck_intel}"
-    if over_represented:
-        intel_section += f"\n\nOVER-REPRESENTED ROLES (safe to cut from): {', '.join(over_represented)}"
-    if under_represented:
-        intel_section += f"\nUNDER-REPRESENTED ROLES (NEVER cut from): {', '.join(under_represented)}"
-    if edhrec_inclusion:
-        intel_section += "\n\nEDHREC INCLUSION (cards in <20% of decks are safer cuts):"
-        if deck_cards:
-            for card in deck_cards:
-                pct = edhrec_inclusion.get(card.card_name.lower(), 0)
-                if pct > 0:
-                    safety = "SAFE CUT" if pct < 20 else "CAUTION" if pct < 40 else "PROTECT"
-                    intel_section += f"\n  {card.card_name}: {pct:.0f}% inclusion [{safety}]"
-    if card_roles:
-        intel_section += "\n\nCARD ROLES:"
-        if deck_cards:
-            for card in deck_cards:
-                roles = card_roles.get(card.card_name, [])
-                if roles:
-                    intel_section += f"\n  {card.card_name}: {', '.join(roles)}"
+        user_msg += f"{deck_intel}\n\n"
 
-    system += intel_section
-    print(f"[AI] Cuts intel injected: {len(intel_section)} chars")
+    if over_represented:
+        user_msg += f"OVER-REPRESENTED ROLES (safe to cut from): {', '.join(over_represented)}\n"
+    if under_represented:
+        user_msg += f"UNDER-REPRESENTED ROLES (NEVER cut from): {', '.join(under_represented)}\n"
+
+    user_msg += f"\nCUT CANDIDATES ({len(cut_candidates)} cards):\n"
+    for c in cut_candidates:
+        roles_str = ", ".join(c["roles"]) if c["roles"] else "no tagged role"
+        critical = " ⚠️CRITICAL ROLE" if c["in_critical_role"] else ""
+        excess = " (excess)" if c["in_excess_role"] else ""
+        user_msg += f"  {c['name']}: {c['inclusion_pct']:.0f}% inclusion, {c['synergy']:.2f} synergy [{c['safety']}] — roles: {roles_str}{critical}{excess}\n"
+
+    print(f"[AI] Cuts prompt: {len(system) + len(user_msg)} chars")
 
     result = _call_ai(system, user_msg)
     print(f"[AI] Cuts AI call ({time.time() - t_ai:.1f}s)")

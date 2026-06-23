@@ -527,6 +527,8 @@ async def _handle_cuts(prompt: str, deck_info: dict, simulation_data: dict,
         role_dist = get_deck_role_distribution(deck_cards, card_lookup)
         gaps = get_deck_gaps(role_dist)
         deck_intel = format_deck_intelligence(role_dist, gaps)
+        print(f"[AI] Role dist: {role_dist.get('counts', {})}")
+        print(f"[AI] Untagged: {role_dist.get('untagged', [])[:10]}")
         card_roles = role_dist.get("card_roles", {})
         counts = role_dist.get("counts", {})
 

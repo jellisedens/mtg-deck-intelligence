@@ -749,56 +749,243 @@ Respond with ONLY valid JSON:
 async def _handle_swap(prompt: str, deck_cards: list, deck_info: dict,
                        simulation_data: dict, card_lookup: dict,
                        role_data: dict, analytics: dict) -> dict:
-    """Handle swap requests (cut + replace)."""
-    t_plan = time.time()
-    deck_context = None
-    if deck_cards:
-        deck_context = build_deck_context(deck_cards, deck_info, analytics, card_lookup, role_data)
+    """Handle swap requests — EDHREC + tag-based."""
+    t_start = time.time()
 
-    plan = _get_ai_plan(prompt, deck_context, deck_info)
-    if "error" in plan:
-        return plan
-    print(f"[AI] Swap plan ({time.time() - t_plan:.1f}s)")
+    # Build deck intelligence from tags
+    card_roles = {}
+    over_represented = []
+    under_represented = []
+    deck_intel = ""
 
+    if deck_cards and card_lookup:
+        from services.card_tagger import (
+            get_deck_role_distribution, get_deck_gaps,
+            format_deck_intelligence, COMMANDER_ROLE_TARGETS,
+        )
+        role_dist = get_deck_role_distribution(deck_cards, card_lookup)
+        gaps = get_deck_gaps(role_dist)
+        deck_intel = format_deck_intelligence(role_dist, gaps)
+        card_roles = role_dist.get("card_roles", {})
+        counts = role_dist.get("counts", {})
+
+        for gap in gaps:
+            under_represented.append(gap["role"])
+        for role, count in counts.items():
+            target = COMMANDER_ROLE_TARGETS.get(role, 0)
+            if target and count > target + 2:
+                over_represented.append(role)
+
+    # Get EDHREC data
+    edhrec_inclusion = {}
+    edhrec_profile = None
+    if deck_info:
+        profile = deck_info.get("strategy_profile") or {}
+        edhrec_profile = profile.get("edhrec_profile", {})
+        for card in edhrec_profile.get("cards", []):
+            edhrec_inclusion[card["name"].lower()] = {
+                "inclusion_pct": card.get("inclusion_pct", 0),
+                "synergy": card.get("synergy", 0),
+            }
+
+    # Build cut candidates
     existing_cards = set()
+    cut_candidates = []
     if deck_cards:
         for card in deck_cards:
             existing_cards.add(card.card_name.lower())
+            if card.board == "commander":
+                continue
+            name = card.card_name
+            roles = card_roles.get(name, [])
+            edata = edhrec_inclusion.get(name.lower(), {})
+            inclusion = edata.get("inclusion_pct", 0)
+            synergy = edata.get("synergy", 0)
 
-    t_search = time.time()
-    search_results = await _execute_searches(
-        queries=plan.get("scryfall_queries", []),
-        exclude_cards=existing_cards,
+            if inclusion >= 40:
+                safety = "PROTECT"
+            elif inclusion >= 20:
+                safety = "CAUTION"
+            elif inclusion > 0:
+                safety = "SAFE CUT"
+            else:
+                safety = "NO DATA"
+
+            in_critical_role = any(r in under_represented for r in roles)
+            in_excess_role = any(r in over_represented for r in roles)
+
+            cut_candidates.append({
+                "name": name,
+                "roles": roles,
+                "inclusion_pct": inclusion,
+                "synergy": synergy,
+                "safety": safety,
+                "in_critical_role": in_critical_role,
+                "in_excess_role": in_excess_role,
+            })
+
+    cut_candidates.sort(key=lambda c: (
+        c["in_critical_role"],
+        -c["in_excess_role"],
+        c["inclusion_pct"],
+        c["synergy"],
+    ))
+
+    # Load tagged EDHREC pool for replacements
+    from services.tag_index import get_card_tags, is_index_loaded
+    from services.tag_classifier import classify_tags, filter_by_category
+
+    replacement_pool = []
+    if edhrec_profile:
+        cached_pool = edhrec_profile.get("_tagged_pool")
+        if cached_pool:
+            replacement_pool = [
+                c for c in cached_pool
+                if c["name"].lower() not in existing_cards
+            ]
+            print(f"[AI] Swap replacement pool (cached): {len(replacement_pool)} cards")
+        else:
+            # Resolve EDHREC cards for replacements
+            all_edhrec = [
+                card for card in edhrec_profile.get("cards", [])
+                if card["name"].lower() not in existing_cards
+            ]
+            if all_edhrec:
+                for i in range(0, len(all_edhrec), 75):
+                    batch = all_edhrec[i:i + 75]
+                    identifiers = [{"name": c["name"]} for c in batch]
+                    resolved = await scryfall_service.get_collection(identifiers)
+                    if "data" in resolved:
+                        lookup = {c["name"].lower(): c for c in batch}
+                        for card_data in resolved["data"]:
+                            name = card_data.get("name", "")
+                            ecard = lookup.get(name.lower(), {})
+                            oracle_id = card_data.get("oracle_id", "")
+                            tags = get_card_tags(oracle_id) if is_index_loaded() else []
+                            replacement_pool.append({
+                                "name": name,
+                                "mana_cost": card_data.get("mana_cost", ""),
+                                "cmc": card_data.get("cmc", 0),
+                                "type_line": card_data.get("type_line", ""),
+                                "oracle_text": card_data.get("oracle_text", ""),
+                                "colors": card_data.get("colors", []),
+                                "color_identity": card_data.get("color_identity", []),
+                                "rarity": card_data.get("rarity", ""),
+                                "prices": card_data.get("prices", {}),
+                                "image_uris": card_data.get("image_uris", {}),
+                                "scryfall_id": card_data.get("id", ""),
+                                "edhrec_rank": card_data.get("edhrec_rank"),
+                                "tags": tags,
+                                "_edhrec_proven": True,
+                                "_edhrec_synergy": ecard.get("synergy", 0),
+                                "_edhrec_inclusion_pct": ecard.get("inclusion_pct", 0),
+                            })
+                print(f"[AI] Swap replacement pool (resolved): {len(replacement_pool)} cards")
+
+    # Sort replacements by synergy
+    replacement_pool.sort(
+        key=lambda c: (c.get("_edhrec_synergy", 0), c.get("_edhrec_inclusion_pct", 0)),
+        reverse=True,
     )
-    print(f"[AI] Swap search: {len(search_results)} ({time.time() - t_search:.1f}s)")
 
-    # Vector search — find conceptually similar cards
-    search_results = _merge_vector_results(search_results, prompt, deck_info, existing_cards)
+    # Build slim replacement list for prompt
+    slim_replacements = []
+    for card in replacement_pool[:30]:
+        s = {
+            "name": card["name"],
+            "mana_cost": card.get("mana_cost", ""),
+            "cmc": card.get("cmc", 0),
+            "type_line": card.get("type_line", ""),
+            "oracle_text": card.get("oracle_text", ""),
+            "scryfall_id": card.get("scryfall_id", ""),
+        }
+        if card.get("_edhrec_proven"):
+            s["edhrec_synergy"] = card.get("_edhrec_synergy", 0)
+            s["edhrec_inclusion_pct"] = card.get("_edhrec_inclusion_pct", 0)
+        slim_replacements.append(s)
 
-    if len(search_results) < 5:
-        search_results = await _broaden_search(prompt, plan, deck_context, search_results, existing_cards)
+    # Build prompt
+    deck_summary = ""
+    if deck_info:
+        profile = deck_info.get("strategy_profile") or {}
+        deck_summary = profile.get("deck_summary", "")
 
-    system, user_msg = build_swap_prompt(
-        prompt=prompt,
-        plan=plan,
-        search_results=search_results[:20],
-        deck_info=deck_info,
-        simulation_data=simulation_data,
-        deck_cards=deck_cards,
-        card_lookup=card_lookup,
-        synergy_rules=SYNERGY_RULES,
-        strategic_context=STRATEGIC_CONTEXT,
-    )
+    system = """You are an expert Magic: The Gathering deck advisor.
+The user wants to swap cards — identify what to CUT and what to ADD as replacements.
+
+Respond with ONLY valid JSON:
+{
+    "summary": "1-2 sentence swap strategy",
+    "suggestions": [
+        {
+            "card_name": "Replacement card from REPLACEMENT OPTIONS",
+            "scryfall_id": "the-scryfall-uuid",
+            "reasoning": "Why this replaces the cut — same role but higher synergy",
+            "category": "ramp/removal/draw/protection/utility/creature/etc"
+        }
+    ],
+    "cuts": [
+        {
+            "card_name": "Card from CUT CANDIDATES",
+            "reasoning": "Cite EDHREC inclusion %, synergy, safety label. Pair with specific replacement."
+        }
+    ],
+    "strategy_notes": "Overall swap strategy and what the deck gains"
+}
+
+SWAP RULES:
+- MUST suggest 2-3 cuts paired with 2-3 replacements
+- Cut cards should be SAFE CUT or NO DATA — never PROTECT
+- Replacements should fill the SAME ROLE as the cut card (ramp for ramp, draw for draw)
+- If the deck has gaps (under-represented roles), swap excess cards for gap-filling cards
+- Always cite EDHREC inclusion % and synergy for both cuts and replacements
+- Cards marked ★PROVEN are used in real commander decks — strongly prefer these
+- Do NOT reference impact scores — use EDHREC data and roles only
+- NEVER cut cards in UNDER-REPRESENTED roles"""
+
+    user_msg = f"User request: {prompt}\n\n"
+
+    if deck_summary:
+        user_msg += f"Deck summary:\n{deck_summary}\n\n"
+
+    if deck_intel:
+        user_msg += f"{deck_intel}\n\n"
+
+    if over_represented:
+        user_msg += f"OVER-REPRESENTED ROLES (swap out from): {', '.join(over_represented)}\n"
+    if under_represented:
+        user_msg += f"UNDER-REPRESENTED ROLES (swap in for): {', '.join(under_represented)}\n"
+
+    user_msg += f"\nCUT CANDIDATES ({len(cut_candidates)} cards, safest first):\n"
+    for c in cut_candidates[:20]:
+        roles_str = ", ".join(c["roles"]) if c["roles"] else "no tagged role"
+        critical = " ⚠️CRITICAL ROLE" if c["in_critical_role"] else ""
+        excess = " (excess)" if c["in_excess_role"] else ""
+        user_msg += f"  {c['name']}: {c['inclusion_pct']:.0f}% inc, {c['synergy']:.2f} syn [{c['safety']}] — {roles_str}{critical}{excess}\n"
+
+    user_msg += f"\nREPLACEMENT OPTIONS ({len(slim_replacements)} cards, highest synergy first):\n"
+    for card in slim_replacements:
+        proven = ""
+        if card.get("edhrec_inclusion_pct"):
+            proven = f" ★PROVEN ({card['edhrec_inclusion_pct']:.0f}% decks, {card['edhrec_synergy']:.0f}% syn)"
+        user_msg += f"  {card['name']} | {card['mana_cost']} | {card['type_line']} | ID: {card['scryfall_id']}{proven}\n"
+        if card.get("oracle_text"):
+            user_msg += f"    Text: {card['oracle_text'][:120]}\n"
+
+    print(f"[AI] Swap prompt: {len(system) + len(user_msg)} chars")
 
     t_ai = time.time()
     result = _call_ai(system, user_msg)
     print(f"[AI] Swap AI call ({time.time() - t_ai:.1f}s)")
 
-    result = _verify_suggestions(result, search_results)
+    # Verify suggestions against replacement pool
+    result = _verify_suggestions(result, replacement_pool)
     result = _verify_cuts(result, deck_info)
     result.setdefault("debug", {})
-    result["debug"]["scryfall_queries"] = plan.get("scryfall_queries", [])
-    result["debug"]["total_search_results"] = len(search_results)
+    result["debug"]["replacement_pool"] = len(replacement_pool)
+    result["debug"]["cut_candidates"] = len(cut_candidates)
+
+    print(f"[AI] Swap total ({time.time() - t_start:.1f}s)")
 
     return result
 

@@ -663,7 +663,7 @@ Respond with ONLY valid JSON:
 {deck_context}
 
 {deck_intel}"""
-print(f"[AI] Discuss intel: {len(deck_intel)} chars")
+    print(f"[AI] Discuss intel: {len(deck_intel)} chars")
 
     result = _call_ai(system, prompt)
     print(f"[AI] Discuss AI call ({time.time() - t_ai:.1f}s)")

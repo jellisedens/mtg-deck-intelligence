@@ -11,7 +11,7 @@ import GameSimulator from "@/components/GameSimulator";
 import AISuggestPanel from "@/components/AISuggestPanel";
 import DeckPreferences from "@/components/DeckPreferences";
 import StrategyGenerator from "@/components/StrategyGenerator";
-import { getDeck, addCard, updateCard, removeCard, getStrategy } from "@/lib/api";
+import { getDeck, addCard, updateCard, removeCard, getStrategy, getDeckTags } from "@/lib/api";
 import { useCardCache } from "@/lib/card-cache";
 import { Deck, ScryfallCard } from "@/lib/types";
 import { usePathname } from "next/navigation";
@@ -32,6 +32,7 @@ function DeckBuilderContent({ deckId }: { deckId: string }) {
   const [hasStrategy, setHasStrategy] = useState(false);
   const [strategy, setStrategy] = useState<Record<string, unknown> | null>(null);
   const [showExport, setShowExport] = useState(false);
+  const [roleTags, setRoleTags] = useState<Record<string, string[]>>({});
 
   const { cardDataMap, fetchCards, addCard: cacheCard, isLoading: cardsLoading } = useCardCache();
 
@@ -47,6 +48,11 @@ function DeckBuilderContent({ deckId }: { deckId: string }) {
       if (data.cards && data.cards.length > 0) {
         const ids = data.cards.map((c) => c.scryfall_id);
         await fetchCards(ids);
+        getDeckTags(deckId)
+          .then((res) => setRoleTags(res.tags || {}))
+          .catch(() => setRoleTags({}));
+      } else {
+        setRoleTags({});
       }
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Failed to load deck");
@@ -301,6 +307,7 @@ function DeckBuilderContent({ deckId }: { deckId: string }) {
             deckId={deckId}
             cards={deck.cards || []}
             cardDataMap={cardDataMap}
+            roleTags={roleTags}
             onUpdateQuantity={handleUpdateQuantity}
             onRemoveCard={handleRemoveCard}
             onChangeBoard={handleChangeBoard}

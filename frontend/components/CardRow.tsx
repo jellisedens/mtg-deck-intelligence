@@ -8,6 +8,7 @@ import CardDetail from "./CardDetail";
 interface Props {
   card: DeckCard;
   cardData?: ScryfallCard;
+  tags?: string[];
   deckId: string;
   onUpdateQuantity: (cardId: string, quantity: number) => Promise<string | null>;
   onRemoveCard: (cardId: string) => void;
@@ -21,6 +22,7 @@ interface Props {
 export default function CardRow({
   card,
   cardData,
+  tags = [],
   deckId,
   onUpdateQuantity,
   onRemoveCard,
@@ -93,10 +95,30 @@ export default function CardRow({
           </span>
         )}
 
-        {/* Role name */}
+        {/* Role name (legacy manual role) */}
         {aiContext?.role && (
           <span className="text-xxs text-text-muted flex-shrink-0">
             {aiContext.role}
+          </span>
+        )}
+
+        {/* Auto-detected tags */}
+        {tags.length > 0 && (
+          <span
+            className="flex-shrink-0 flex gap-1"
+            title={tags.map((t) => t.replace("_", " ")).join(", ")}
+          >
+            {tags.slice(0, 2).map((tag) => (
+              <span
+                key={tag}
+                className="text-xxs px-1.5 py-0.5 rounded border border-accent-blue/30 text-accent-blue bg-accent-blue/10"
+              >
+                {tag.replace("_", " ")}
+              </span>
+            ))}
+            {tags.length > 2 && (
+              <span className="text-xxs text-text-muted self-center">+{tags.length - 2}</span>
+            )}
           </span>
         )}
 
@@ -148,6 +170,7 @@ export default function CardRow({
           <CardDetail
             cardData={cardData}
             deckCard={card}
+            tags={tags}
             deckId={deckId}
             onUpdateNotes={onUpdateNotes}
             onRolesUpdated={onRolesUpdated}

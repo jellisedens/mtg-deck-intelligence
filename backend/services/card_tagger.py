@@ -51,6 +51,31 @@ def get_card_roles(oracle_id: str, oracle_text: str = "", type_line: str = "") -
     return roles
 
 
+async def get_role_tags_for_deck(deck_cards: list) -> dict:
+    """
+    Fetch Scryfall data for a deck and compute canonical role tags per card.
+    Used by the deck view to display auto-detected tags (ramp, removal, draw, etc.)
+    """
+    from services.scryfall import scryfall_service
+
+    if not deck_cards:
+        return {"tags": {}, "counts": {}, "untagged": []}
+
+    identifiers = [{"id": c.scryfall_id} for c in deck_cards]
+    scryfall_data = await scryfall_service.get_collection(identifiers)
+    if "error" in scryfall_data:
+        return {"tags": {}, "counts": {}, "untagged": [c.card_name for c in deck_cards]}
+
+    card_lookup = {c["id"]: c for c in scryfall_data.get("data", [])}
+    role_dist = get_deck_role_distribution(deck_cards, card_lookup)
+
+    return {
+        "tags": role_dist["card_roles"],
+        "counts": role_dist["counts"],
+        "untagged": role_dist["untagged"],
+    }
+
+
 def get_deck_role_distribution(deck_cards: list, card_lookup: dict) -> dict:
     """
     Get role counts and per-card roles for an entire deck.

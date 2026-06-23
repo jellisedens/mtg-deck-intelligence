@@ -57,6 +57,7 @@ interface Props {
   deckId: string;
   cards: DeckCard[];
   cardDataMap: Record<string, ScryfallCard>;
+  roleTags?: Record<string, string[]>;
   onUpdateQuantity: (cardId: string, quantity: number) => Promise<string | null>;
   onRemoveCard: (cardId: string) => void;
   onChangeBoard: (cardId: string, board: string) => void;
@@ -69,6 +70,7 @@ export default function DeckList({
   deckId,
   cards,
   cardDataMap,
+  roleTags = {},
   onUpdateQuantity,
   onRemoveCard,
   onChangeBoard,
@@ -129,6 +131,7 @@ export default function DeckList({
                   key={card.id}
                   card={card}
                   cardData={cardDataMap[card.scryfall_id]}
+                  tags={roleTags[card.card_name] || []}
                   deckId={deckId}
                   onUpdateQuantity={onUpdateQuantity}
                   onRemoveCard={onRemoveCard}
@@ -150,6 +153,7 @@ export default function DeckList({
         key={card.id}
         card={card}
         cardData={cardDataMap[card.scryfall_id]}
+        tags={roleTags[card.card_name] || []}
         deckId={deckId}
         onUpdateQuantity={onUpdateQuantity}
         onRemoveCard={onRemoveCard}
@@ -208,6 +212,7 @@ export default function DeckList({
                     key={commanderCard.id}
                     card={commanderCard}
                     cardData={cardDataMap[commanderCard.scryfall_id]}
+                    tags={roleTags[commanderCard.card_name] || []}
                     deckId={deckId}
                     onUpdateQuantity={onUpdateQuantity}
                     onRemoveCard={onRemoveCard}

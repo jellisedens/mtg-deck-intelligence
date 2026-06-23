@@ -126,6 +126,12 @@ export interface TypeDistribution {
   count: number;
 }
 
+export interface DeckTagsResponse {
+  tags: Record<string, string[]>;
+  counts: Record<string, number>;
+  untagged: string[];
+}
+
 export interface DeckAnalytics {
   mana_curve: ManaCurveEntry[];
   color_distribution: ColorDistribution[];

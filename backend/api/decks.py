@@ -535,6 +535,28 @@ def get_deck_roles(
     }
 
 
+@router.get("/{deck_id}/tags")
+async def get_deck_tags(
+    deck_id: UUID,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Auto-detected role tags per card, from the Scryfall Oracle Tag index.
+    Read-only — computed on the fly, not persisted.
+    """
+    from services.card_tagger import get_role_tags_for_deck
+
+    deck = db.query(Deck).filter(Deck.id == deck_id).first()
+    if not deck:
+        raise HTTPException(status_code=404, detail="Deck not found")
+    if deck.user_id != user.id:
+        raise HTTPException(status_code=403, detail="Not your deck")
+
+    cards = db.query(DeckCard).filter(DeckCard.deck_id == deck.id).all()
+    return await get_role_tags_for_deck(cards)
+
+
 @router.post("/{deck_id}/roles/auto-suggest")
 async def auto_suggest_roles(
     deck_id: UUID,

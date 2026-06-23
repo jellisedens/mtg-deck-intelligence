@@ -7,6 +7,7 @@ import {
   AddCardRequest,
   DeckPreferences,
   DeckAnalytics,
+  DeckTagsResponse,
   StrategyProfile,
   HandSimulationResult,
   GameSimulationResult,
@@ -315,6 +316,11 @@ export async function importText(data: ImportTextRequest): Promise<Deck> {
 // ── Analytics ────────────────────────────────────────
 export async function getAnalytics(deckId: string): Promise<DeckAnalytics> {
   return request<DeckAnalytics>(`/decks/${deckId}/analytics`);
+}
+
+// ── Tags ─────────────────────────────────────────────
+export async function getDeckTags(deckId: string): Promise<DeckTagsResponse> {
+  return request<DeckTagsResponse>(`/decks/${deckId}/tags`);
 }
 
 // ── Strategy ─────────────────────────────────────────

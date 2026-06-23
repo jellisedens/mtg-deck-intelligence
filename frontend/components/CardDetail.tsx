@@ -54,12 +54,13 @@ function ScoreBadge({ score }: { score: number }) {
 interface Props {
   cardData: ScryfallCard;
   deckCard: DeckCard;
+  tags?: string[];
   deckId: string;
   onUpdateNotes: (cardId: string, notes: string) => void;
   onRolesUpdated?: () => void;
 }
 
-export default function CardDetail({ cardData, deckCard, deckId, onUpdateNotes, onRolesUpdated }: Props) {
+export default function CardDetail({ cardData, deckCard, tags = [], deckId, onUpdateNotes, onRolesUpdated }: Props) {
   const [notes, setNotes] = useState(deckCard.notes || "");
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -192,6 +193,23 @@ export default function CardDetail({ cardData, deckCard, deckId, onUpdateNotes, 
           )}
         </div>
       </div>
+
+      {/* Auto-detected tags (from Scryfall Oracle Tag index) */}
+      {tags.length > 0 && (
+        <div className="border-t border-border pt-3">
+          <span className="text-xxs text-text-muted uppercase tracking-wider">auto tags</span>
+          <div className="flex flex-wrap gap-1.5 mt-2">
+            {tags.map((tag) => (
+              <span
+                key={tag}
+                className="text-xxs px-2 py-0.5 rounded border border-accent-blue/30 text-accent-blue bg-accent-blue/10"
+              >
+                {tag.replace("_", " ")}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* User role tags */}
       <div className="border-t border-border pt-3">

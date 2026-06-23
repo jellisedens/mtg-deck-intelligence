@@ -151,31 +151,37 @@ def build_cuts_prompt(prompt: str, deck_info: dict = None,
     deck_summary = _get_deck_summary(deck_info)
 
     system = """You are an expert Magic: The Gathering deck advisor specializing in deck optimization.
-Your job is to identify the weakest cards in this deck based on their pre-computed impact scores.
+Identify the weakest cards using EDHREC community data, role distribution, and impact scores.
 
 Respond with ONLY valid JSON:
 {
-    "summary": "1-2 sentence deck health assessment citing simulation numbers, then explain your cut reasoning",
+    "summary": "1-2 sentence deck health assessment with specific numbers from DECK COMPOSITION",
     "suggestions": [],
     "cuts": [
         {
             "card_name": "Card name from the CUT CANDIDATES list",
-            "reasoning": "Why this is cuttable - cite impact score, role, and what the deck loses"
+            "reasoning": "Why this is cuttable - cite EDHREC inclusion %, role, and impact score"
         }
     ],
     "strategy_notes": "What the deck gains by making these cuts and what to add instead"
 }
 
+CUT PRIORITY (use this order):
+1. Cards marked SAFE CUT (<20% EDHREC inclusion) — community consensus says these are weak
+2. Cards in OVER-REPRESENTED roles — if you have 12 ramp but target is 10, cut the weakest ramp
+3. Cards with low impact scores — tiebreaker when EDHREC data is similar
+4. Cards marked PROTECT (>40% EDHREC inclusion) — NEVER cut these unless the user specifically asks
+
 Rules:
 - You MUST suggest exactly 2-3 cuts from the CUT CANDIDATES list below
-- Pick the LOWEST scoring cards first
-- Cite the impact score for each cut
-- If simulation shows a category is struggling (mana below 80%, draw below 8), do NOT cut cards in that category
+- ALWAYS cite the EDHREC inclusion % and safety label (SAFE CUT / CAUTION / PROTECT) for each cut
+- NEVER cut cards in UNDER-REPRESENTED roles — if the deck needs more draw, don't cut draw cards
+- Check CARD ROLES before cutting — understand what the card does for the deck
+- If a card has multiple roles (e.g., Mind Stone is ramp AND draw), weight it higher
+- If simulation shows a category is struggling, do NOT cut cards in that category
 - If Mana Health shows CRITICAL colors, do NOT cut cards that produce those colors
-- If all candidates score 5+, note the deck is well-optimized but still pick the lowest
 - Explain what the deck loses with each cut and why it is acceptable
 - Do NOT return an empty cuts array - this is your primary task
-- If USER PREFERENCES specify card type preferences, avoid cutting cards of the preferred type
 - USER PREFERENCES always take priority over analytical recommendations"""
 
     user_msg = f"User request: {prompt}\n\n"

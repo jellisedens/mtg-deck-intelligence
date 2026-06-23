@@ -247,7 +247,7 @@ Rules:
 - Identify the deck's biggest strengths and weaknesses
 - Prioritize the top 3 things to fix
 - Be specific - "add 2 more white sources" not "improve mana base"
-- Reference the impact rating distribution to assess overall deck quality
+- Reference the DECK COMPOSITION role counts and gaps to assess deck quality
 - When Mana Health scores are provided, use them as the authoritative source for color fixing priorities
 - The color with the LOWEST Mana Health score is the #1 fix priority
 - Colors marked CRITICAL (below 65) need immediate attention
@@ -276,18 +276,7 @@ Rules:
     if prefs_str:
         user_msg += f"\n{prefs_str}\n"
 
-    # Add impact distribution if available
-    profile = (deck_info or {}).get("strategy_profile") or {}
-    impact_ratings = profile.get("card_impact_ratings", [])
-    if impact_ratings:
-        scores = [r.get("score", 5) for r in impact_ratings]
-        user_msg += f"\nImpact rating distribution: avg {round(sum(scores)/len(scores), 1)}, "
-        user_msg += f"core(9-10): {len([s for s in scores if s >= 9])}, "
-        user_msg += f"strong(7-8): {len([s for s in scores if 7 <= s <= 8])}, "
-        user_msg += f"solid(5-6): {len([s for s in scores if 5 <= s <= 6])}, "
-        user_msg += f"flexible(3-4): {len([s for s in scores if 3 <= s <= 4])}"
-
-    user_msg += "\n\nProvide a comprehensive deck health analysis."
+    user_msg += "\n\nProvide a comprehensive deck health analysis. Use the DECK COMPOSITION data injected into the system prompt for exact role counts and gaps. Do NOT reference impact scores."
 
     return system, user_msg
 

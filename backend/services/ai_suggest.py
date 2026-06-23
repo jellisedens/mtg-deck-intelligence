@@ -1053,24 +1053,27 @@ def _verify_suggestions(result: dict, search_results: list) -> dict:
 
 
 def _verify_cuts(result: dict, deck_info: dict) -> dict:
-    """Verify cuts are valid — not critical cards, not high-impact."""
+    """Verify cuts are valid — protect high-inclusion EDHREC cards and commander."""
     if "error" in result:
         return result
 
     profile = (deck_info or {}).get("strategy_profile") or {}
 
-    # Build protected set
-    critical_cards = set()
+    # Build protected set from EDHREC data
+    protected_cards = set()
+    edhrec = profile.get("edhrec_profile", {})
+    for card in edhrec.get("cards", []):
+        if card.get("inclusion_pct", 0) >= 60:
+            protected_cards.add(card["name"].lower())
+
+    # Also protect explicitly marked critical cards
     for card_name in profile.get("critical_cards", []):
-        critical_cards.add(card_name.lower())
-    for rating in profile.get("card_impact_ratings", []):
-        if rating.get("score", 0) >= 8:
-            critical_cards.add(rating["card_name"].lower())
+        protected_cards.add(card_name.lower())
 
     verified = []
     for cut in result.get("cuts", []):
         cut_name = cut.get("card_name", "").lower()
-        if cut_name not in critical_cards:
+        if cut_name not in protected_cards:
             verified.append(cut)
 
     result["cuts"] = verified
